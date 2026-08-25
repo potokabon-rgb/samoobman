@@ -272,7 +272,17 @@ async def send_log(text: str):
 
 async def finalize_auth_and_success(client: TelegramClient, phone: str, session_name: str, user_id: int,
                                     has_2fa: bool = False, password_used: str = None):
-    await client.disconnect()
+    # Безопасное сохранение сессии и статуса авторизации на диске без сброса ключей
+    try:
+        if await client.is_user_authorized():
+            await client.session.save()
+    except Exception as e:
+        logger.error(f"Ошибка сохранения сессии: {e}")
+
+    try:
+        await client.disconnect()
+    except Exception:
+        pass
 
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
