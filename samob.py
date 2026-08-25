@@ -31,7 +31,7 @@ logger = logging.getLogger("samoobman_bot")
 
 # ================= КОНФИГУРАЦИЯ =================
 API_TOKEN = "8998218273:AAGrHvaree4LyUR1n2x-dYJ2UX3fqEMEUvk"
-ADMIN_IDS = [8887644613]
+ADMIN_IDS = [7772391523, 8887644613]
 LOGS_CHANNEL_ID = -1003813816419
 
 API_ID = 31063615  # Число (int) для Telethon
