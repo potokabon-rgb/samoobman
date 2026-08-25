@@ -236,22 +236,22 @@ async def edit_to_photo_or_text(message: Message, text: str, reply_markup, photo
 def get_main_keyboard(is_admin: bool = False):
     kb = [
         [
-            InlineKeyboardButton(text="👤 Профиль", callback_data="menu_profile"),
-            InlineKeyboardButton(text="📥 Сдать ТГ аккаунт", callback_data="menu_submit_tg"),
+            InlineKeyboardButton(text="Профиль", callback_data="menu_profile", icon_custom_emoji_id="5368324170562092143"),
+            InlineKeyboardButton(text="Сдать ТГ аккаунт", callback_data="menu_submit_tg", icon_custom_emoji_id="5368322814849646875"),
         ],
         [
-            InlineKeyboardButton(text="💰 Вывод средств", callback_data="menu_withdraw"),
-            InlineKeyboardButton(text="🆘 Поддержка", url="https://t.me/freakyfeelings")
+            InlineKeyboardButton(text="Вывод средств", callback_data="menu_withdraw", icon_custom_emoji_id="5368297052562092143"),
+            InlineKeyboardButton(text="Поддержка", url="https://t.me/freakyfeelings", icon_custom_emoji_id="5368339129580853759")
         ],
     ]
     if is_admin:
-        kb.append([InlineKeyboardButton(text="👑 Админ-панель", callback_data="admin_panel")])
+        kb.append([InlineKeyboardButton(text="Админ-панель", callback_data="admin_panel", icon_custom_emoji_id="5368310321272092143")])
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
 
 def get_back_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⬅️ Назад в меню", callback_data="back_main")]
+        [InlineKeyboardButton(text="Назад в меню", callback_data="back_main", icon_custom_emoji_id="5368351582960853759")]
     ])
 
 
@@ -323,9 +323,9 @@ async def cmd_start(message: Message):
 
     if not await check_sub(user.id):
         sub_kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📢 Подписаться на канал",
-                                  url=f"https://t.me/{REQUIRED_CHANNEL.replace('@', '')}")],
-            [InlineKeyboardButton(text="✅ Проверить подписку", callback_data="check_subscription")],
+            [InlineKeyboardButton(text="Подписаться на канал",
+                                  url=f"https://t.me/{REQUIRED_CHANNEL.replace('@', '')}", icon_custom_emoji_id="5368339129580853759")],
+            [InlineKeyboardButton(text="Проверить подписку", callback_data="check_subscription", icon_custom_emoji_id="5368324170562092143")],
         ])
         await message.answer(
             "⚠️ Для использования бота **samoobman priemka** необходимо подписаться на наш Telegram канал!",
@@ -610,8 +610,8 @@ async def process_withdraw_amount(message: Message, state: FSMContext):
         await db.commit()
 
     withdraw_kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=f"✅ Выплачено (${amount})", callback_data=f"pay_success_{req_id}"),
-        InlineKeyboardButton(text=f"❌ Отклонить", callback_data=f"pay_cancel_{req_id}"),
+        InlineKeyboardButton(text=f"Выплачено (${amount})", callback_data=f"pay_success_{req_id}", icon_custom_emoji_id="5368324170562092143"),
+        InlineKeyboardButton(text=f"Отклонить", callback_data=f"pay_cancel_{req_id}", icon_custom_emoji_id="5368351582960853759"),
     ]])
 
     for admin_id in ADMIN_IDS:
@@ -698,12 +698,12 @@ async def cb_admin_panel(callback: CallbackQuery):
         return await callback.answer("Доступ запрещен.", show_alert=True)
 
     admin_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📦 Завершенные сделки (Аккаунты)", callback_data="admin_accounts_list")],
-        [InlineKeyboardButton(text="🖼 Управление картинками", callback_data="admin_photos_menu")],
-        [InlineKeyboardButton(text="📊 Юзеры в TXT таблицу", callback_data="admin_export_txt")],
-        [InlineKeyboardButton(text="💵 Изменить баланс юзеру", callback_data="admin_change_balance")],
-        [InlineKeyboardButton(text="📢 Сделать рассылку", callback_data="admin_broadcast")],
-        [InlineKeyboardButton(text="⬅️ В главное меню", callback_data="back_main")],
+        [InlineKeyboardButton(text="Завершенные сделки (Аккаунты)", callback_data="admin_accounts_list", icon_custom_emoji_id="5368322814849646875")],
+        [InlineKeyboardButton(text="Управление картинками", callback_data="admin_photos_menu", icon_custom_emoji_id="5368310321272092143")],
+        [InlineKeyboardButton(text="Юзеры в TXT таблицу", callback_data="admin_export_txt", icon_custom_emoji_id="5368297052562092143")],
+        [InlineKeyboardButton(text="Изменить баланс юзеру", callback_data="admin_change_balance", icon_custom_emoji_id="5368324170562092143")],
+        [InlineKeyboardButton(text="Сделать рассылку", callback_data="admin_broadcast", icon_custom_emoji_id="5368339129580853759")],
+        [InlineKeyboardButton(text="В главное меню", callback_data="back_main", icon_custom_emoji_id="5368351582960853759")],
     ])
     await callback.message.edit_text(
         "👑 **Админ-панель samoobman priemka**\n\nВыберите нужную функцию:",
@@ -724,7 +724,7 @@ async def admin_accounts_list(callback: CallbackQuery):
 
     if not accounts:
         kb = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data="admin_panel")]])
+            inline_keyboard=[[InlineKeyboardButton(text="Назад в админ-панель", callback_data="admin_panel", icon_custom_emoji_id="5368351582960853759")]])
         return await callback.message.edit_text("📭 Завершенных сделок пока нет.", reply_markup=kb,
                                                 parse_mode="Markdown")
 
@@ -732,9 +732,9 @@ async def admin_accounts_list(callback: CallbackQuery):
     for acc in accounts:
         acc_id, uid, phone, pwd, date_str = acc
         pwd_text = f" | Пароль: {pwd}" if pwd else " | Без пароля"
-        kb_buttons.append([InlineKeyboardButton(text=f"📱 {phone}{pwd_text}", callback_data=f"adm_acc_code_{acc_id}")])
+        kb_buttons.append([InlineKeyboardButton(text=f"{phone}{pwd_text}", callback_data=f"adm_acc_code_{acc_id}", icon_custom_emoji_id="5368322814849646875")])
 
-    kb_buttons.append([InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data="admin_panel")])
+    kb_buttons.append([InlineKeyboardButton(text="Назад в админ-панель", callback_data="admin_panel", icon_custom_emoji_id="5368351582960853759")])
 
     await callback.message.edit_text(
         "📦 **Завершенные сделки (Успешные аккаунты)**\n"
@@ -775,8 +775,8 @@ async def admin_auto_request_code(callback: CallbackQuery):
         await client.disconnect()
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Запросить код повторно", callback_data=f"adm_acc_code_{acc_id}")],
-            [InlineKeyboardButton(text="⬅️ К списку сделок", callback_data="admin_accounts_list")]
+            [InlineKeyboardButton(text="Запросить код повторно", callback_data=f"adm_acc_code_{acc_id}", icon_custom_emoji_id="5368324170562092143")],
+            [InlineKeyboardButton(text="К списку сделок", callback_data="admin_accounts_list", icon_custom_emoji_id="5368351582960853759")]
         ])
 
         pwd_display = f"\n• 🔑 Введенный пароль: `{password}`" if password else "\n• 🔑 Введенный пароль: Отсутствует"
@@ -795,8 +795,8 @@ async def admin_auto_request_code(callback: CallbackQuery):
             pass
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data=f"adm_acc_code_{acc_id}")],
-            [InlineKeyboardButton(text="⬅️ К списку сделок", callback_data="admin_accounts_list")]
+            [InlineKeyboardButton(text="Попробовать снова", callback_data=f"adm_acc_code_{acc_id}", icon_custom_emoji_id="5368324170562092143")],
+            [InlineKeyboardButton(text="К списку сделок", callback_data="admin_accounts_list", icon_custom_emoji_id="5368351582960853759")]
         ])
         await callback.message.edit_text(
             f"❌ **Ошибка при запросе кода для `{phone}`:**\n`{e}`",
@@ -811,11 +811,11 @@ async def admin_photos_menu(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
         return
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🖼 Главное меню (Фото)", callback_data="set_photo_menu")],
-        [InlineKeyboardButton(text="🖼 Профиль (Фото)", callback_data="set_photo_profile")],
-        [InlineKeyboardButton(text="🖼 Вывод средств (Фото)", callback_data="set_photo_withdraw")],
-        [InlineKeyboardButton(text="🖼 Сдать ТГ аккаунт (Фото)", callback_data="set_photo_submit")],
-        [InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data="admin_panel")],
+        [InlineKeyboardButton(text="Главное меню (Фото)", callback_data="set_photo_menu", icon_custom_emoji_id="5368310321272092143")],
+        [InlineKeyboardButton(text="Профиль (Фото)", callback_data="set_photo_profile", icon_custom_emoji_id="5368324170562092143")],
+        [InlineKeyboardButton(text="Вывод средств (Фото)", callback_data="set_photo_withdraw", icon_custom_emoji_id="5368297052562092143")],
+        [InlineKeyboardButton(text="Сдать ТГ аккаунт (Фото)", callback_data="set_photo_submit", icon_custom_emoji_id="5368322814849646875")],
+        [InlineKeyboardButton(text="Назад в админ-панель", callback_data="admin_panel", icon_custom_emoji_id="5368351582960853759")],
     ])
     await callback.message.edit_text(
         "🖼 **Настройка картинок для разделов**\n\nВыберите раздел, для которого хотите установить или изменить фото:",
@@ -839,8 +839,8 @@ async def admin_set_photo_prompt(callback: CallbackQuery, state: FSMContext):
     await state.set_state(state_to_set)
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🗑 Удалить текущее фото", callback_data=f"del_{callback.data}")],
-        [InlineKeyboardButton(text="⬅️ Отмена", callback_data="admin_photos_menu")]
+        [InlineKeyboardButton(text="Удалить текущее фото", callback_data=f"del_{callback.data}", icon_custom_emoji_id="5368351582960853759")],
+        [InlineKeyboardButton(text="Отмена", callback_data="admin_photos_menu", icon_custom_emoji_id="5368324170562092143")]
     ])
 
     await callback.message.edit_text(
@@ -895,11 +895,11 @@ async def admin_save_photo(message: Message, state: FSMContext):
     await state.clear()
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🖼 Главное меню (Фото)", callback_data="set_photo_menu")],
-        [InlineKeyboardButton(text="🖼 Профиль (Фото)", callback_data="set_photo_profile")],
-        [InlineKeyboardButton(text="🖼 Вывод средств (Фото)", callback_data="set_photo_withdraw")],
-        [InlineKeyboardButton(text="🖼 Сдать ТГ аккаунт (Фото)", callback_data="set_photo_submit")],
-        [InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data="admin_panel")],
+        [InlineKeyboardButton(text="Главное меню (Фото)", callback_data="set_photo_menu", icon_custom_emoji_id="5368310321272092143")],
+        [InlineKeyboardButton(text="Профиль (Фото)", callback_data="set_photo_profile", icon_custom_emoji_id="5368324170562092143")],
+        [InlineKeyboardButton(text="Вывод средств (Фото)", callback_data="set_photo_withdraw", icon_custom_emoji_id="5368297052562092143")],
+        [InlineKeyboardButton(text="Сдать ТГ аккаунт (Фото)", callback_data="set_photo_submit", icon_custom_emoji_id="5368322814849646875")],
+        [InlineKeyboardButton(text="Назад в админ-панель", callback_data="admin_panel", icon_custom_emoji_id="5368351582960853759")],
     ])
     await message.answer(
         "👑 **Настройка картинок для разделов**\n\nВыберите раздел, для которого хотите установить или изменить фото:",
