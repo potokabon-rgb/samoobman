@@ -368,7 +368,6 @@ async def cb_request_tg_code(callback: CallbackQuery, state: FSMContext):
     if not phone or not session_path:
         return await callback.answer("❌ Сессия устарела. Начните заново.", show_alert=True)
 
-    # Исправление ошибки: передаем API_ID как строку
     client = TelegramClient(session_path, str(API_ID), API_HASH)
 
     try:
@@ -393,7 +392,6 @@ async def cb_request_tg_code(callback: CallbackQuery, state: FSMContext):
             f"❌ Ошибка отправки кода: {e}\nПопробуйте заново.", reply_markup=get_back_keyboard()
         )
     finally:
-        # Отключаем клиент, чтобы не держать висячее соединение до ввода кода
         try:
             await client.disconnect()
         except Exception:
@@ -559,17 +557,20 @@ async def process_withdraw(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("pay_success_"))
 async def admin_pay_success(callback: CallbackQuery):
-    if callback.from_user.id not in ADMIN_IDS: return
+    if callback.from_user.id not in ADMIN_IDS:
+        return await callback.answer("⛔ Доступ запрещен.", show_alert=True)
     req_id = int(callback.data.split("_")[2])
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE withdraw_requests SET status = 'paid' WHERE id = ?", (req_id,))
         await db.commit()
     await callback.message.edit_text(f"{callback.message.text}\n\n**[ВЫПЛАЧЕНО ✅]**", parse_mode="Markdown")
+    await callback.answer("Выплата отмечена как успешная.")
 
 
 @router.callback_query(F.data.startswith("pay_cancel_"))
 async def admin_pay_cancel(callback: CallbackQuery):
-    if callback.from_user.id not in ADMIN_IDS: return
+    if callback.from_user.id not in ADMIN_IDS:
+        return await callback.answer("⛔ Доступ запрещен.", show_alert=True)
     req_id = int(callback.data.split("_")[2])
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT user_id, amount FROM withdraw_requests WHERE id = ?", (req_id,)) as cursor:
@@ -586,6 +587,7 @@ async def admin_pay_cancel(callback: CallbackQuery):
                 except Exception:
                     pass
     await callback.message.edit_text(f"{callback.message.text}\n\n**[ОТМЕНЕНО ❌]**", parse_mode="Markdown")
+    await callback.answer("Заявка отклонена.")
 
 
 # ================= АДМИН-ПАНЕЛЬ =================
@@ -602,13 +604,19 @@ async def cb_admin_panel(callback: CallbackQuery):
         [InlineKeyboardButton(text="🖼 Управление фото разделов", callback_data="admin_manage_photos")],
         [InlineKeyboardButton(text="⬅️ Главное меню", callback_data="back_main")],
     ])
-    await callback.message.edit_text("👑 **Панель администратора samoobman priemka**", reply_markup=admin_kb,
-                                     parse_mode="Markdown")
+    try:
+        await callback.message.edit_text("👑 **Панель администратора samoobman priemka**", reply_markup=admin_kb,
+                                         parse_mode="Markdown")
+    except Exception:
+        await callback.message.answer("👑 **Панель администратора samoobman priemka**", reply_markup=admin_kb,
+                                      parse_mode="Markdown")
+    await callback.answer()
 
 
 @router.callback_query(F.data == "admin_export_tdata")
 async def admin_export_tdata(callback: CallbackQuery):
-    if callback.from_user.id not in ADMIN_IDS: return
+    if callback.from_user.id not in ADMIN_IDS:
+        return await callback.answer("⛔ Доступ запрещен.", show_alert=True)
     archive_name = "all_tdata_archives"
     if os.path.exists(SESSIONS_DIR) and os.listdir(SESSIONS_DIR):
         shutil.make_archive(archive_name, 'zip', SESSIONS_DIR)
@@ -617,13 +625,15 @@ async def admin_export_tdata(callback: CallbackQuery):
             caption="📦 Полный архив всех сданных сессий и TData папок.",
             parse_mode="Markdown"
         )
+        await callback.answer()
     else:
         await callback.answer("📁 Папка с сессиями пуста.", show_alert=True)
 
 
 @router.callback_query(F.data == "admin_export_txt")
 async def admin_export_txt(callback: CallbackQuery):
-    if callback.from_user.id not in ADMIN_IDS: return
+    if callback.from_user.id not in ADMIN_IDS:
+        return await callback.answer("⛔ Доступ запрещен.", show_alert=True)
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
                 "SELECT user_id, username, full_name, balance, total_earned, reg_date FROM users") as cursor:
@@ -646,13 +656,16 @@ async def admin_export_txt(callback: CallbackQuery):
         caption="📊 Красивая таблица всех пользователей системы.",
         parse_mode="Markdown"
     )
+    await callback.answer()
 
 
 @router.callback_query(F.data == "admin_change_balance")
 async def admin_change_bal_start(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id not in ADMIN_IDS: return
+    if callback.from_user.id not in ADMIN_IDS:
+        return await callback.answer("⛔ Доступ запрещен.", show_alert=True)
     await callback.message.answer("Введите Telegram ID пользователя:")
     await state.set_state(AdminStates.waiting_for_user_id_balance)
+    await callback.answer()
 
 
 @router.message(AdminStates.waiting_for_user_id_balance)
@@ -692,9 +705,11 @@ async def admin_set_balance(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "admin_broadcast")
 async def admin_broadcast_start(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id not in ADMIN_IDS: return
+    if callback.from_user.id not in ADMIN_IDS:
+        return await callback.answer("⛔ Доступ запрещен.", show_alert=True)
     await callback.message.answer("📢 Введите текст рассылки для всех пользователей:")
     await state.set_state(AdminStates.waiting_for_broadcast_text)
+    await callback.answer()
 
 
 @router.message(AdminStates.waiting_for_broadcast_text)
@@ -717,7 +732,8 @@ async def admin_send_broadcast(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "admin_manage_photos")
 async def admin_manage_photos(callback: CallbackQuery):
-    if callback.from_user.id not in ADMIN_IDS: return
+    if callback.from_user.id not in ADMIN_IDS:
+        return await callback.answer("⛔ Доступ запрещен.", show_alert=True)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🖼 Главное меню", callback_data="setphoto_main")],
         [InlineKeyboardButton(text="🖼 Профиль", callback_data="setphoto_profile")],
@@ -726,16 +742,19 @@ async def admin_manage_photos(callback: CallbackQuery):
         [InlineKeyboardButton(text="⬅️ В админ-панель", callback_data="admin_panel")],
     ])
     await callback.message.edit_text("Выберите категорию, в которую хотите добавить/изменить фото:", reply_markup=kb)
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("setphoto_"))
 async def admin_set_photo_category(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id not in ADMIN_IDS: return
+    if callback.from_user.id not in ADMIN_IDS:
+        return await callback.answer("⛔ Доступ запрещен.", show_alert=True)
     category = callback.data.split("_")[1]
     await state.update_data(photo_category=category)
     await callback.message.answer(
         f"📸 Отправьте изображение (картинку), которое будет прикрепляться к категории: **{category}**")
     await state.set_state(AdminStates.waiting_for_new_photo)
+    await callback.answer()
 
 
 @router.message(AdminStates.waiting_for_new_photo, F.photo)
