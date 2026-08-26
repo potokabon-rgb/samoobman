@@ -37,7 +37,8 @@ LOGS_CHANNEL_ID = -1003813816419
 API_ID = 31063615  # Число (int) для Telethon
 API_HASH = "dbe3b8f435016b0dcd3e4bca995a9169"
 
-DB_PATH = "database.db"
+# Изменили имя файла, чтобы создать новую чистую базу данных
+DB_PATH = "database_v2.db"
 SESSIONS_DIR = "sessions_data"
 os.makedirs(SESSIONS_DIR, exist_ok=True)
 
@@ -583,13 +584,16 @@ async def process_withdraw_amount(message: Message, state: FSMContext):
         InlineKeyboardButton(text=f"❌ Отклонить", callback_data=f"pay_cancel_{req_id}"),
     ]])
 
+    user = message.from_user
+    user_mention = f"@{user.username}" if user.username else f"`{user.id}`"
+
     for admin_id in ADMIN_IDS:
         try:
             await bot.send_message(
                 chat_id=admin_id,
                 text=(
-                    f"🚨 **Новая заявка на вывод в samoobman priemka!**\n\n"
-                    f"• От: {message.from_user.full_name} (`{message.from_user.id}`)\n"
+                    f"🚨 **Заявка на вывод:**\n\n"
+                    f"• Юзер: {user_mention}\n"
                     f"• Сумма: **${amount:.2f}**"
                 ),
                 reply_markup=withdraw_kb, parse_mode="Markdown"
