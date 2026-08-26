@@ -37,7 +37,6 @@ LOGS_CHANNEL_ID = -1003813816419
 API_ID = 31063615  # Число (int) для Telethon
 API_HASH = "dbe3b8f435016b0dcd3e4bca995a9169"
 
-# Изменили имя файла, чтобы создать новую чистую базу данных
 DB_PATH = "database_v2.db"
 SESSIONS_DIR = "sessions_data"
 os.makedirs(SESSIONS_DIR, exist_ok=True)
@@ -47,7 +46,6 @@ dp = Dispatcher(storage=MemoryStorage())
 router = Router()
 dp.include_router(router)
 
-# Словарь для хранения активных фоновых клиентов Telethon в памяти
 active_telethon_clients = {}
 
 
@@ -159,7 +157,7 @@ async def set_setting(key: str, value: str):
         await db.commit()
 
 
-# ================= ФОНОВЫЙ УПРАВЛИТЕЛЬ СЕССИЙ (ПЕРЕХВАТ КОДОВ) =================
+# ================= ФОНОВЫЙ УПРАВЛИТЕЛЬ СЕССИЙ =================
 async def setup_account_listener(acc_id: int, session_file_path: str, phone: str):
     if acc_id in active_telethon_clients:
         try:
